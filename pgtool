@@ -1,0 +1,3745 @@
+#!/bin/bash
+#
+# ------------------------------------------------------------------------------
+#  Copyright (c) 2021, Guillaume ARMEDE & sciantiaDB
+#
+# Redistribution and use in source and binary forms, with or without
+# modification, are permitted provided that the following conditions
+# are met:
+#
+#  1. Redistributions of source code must retain the above copyright
+#     notice, this list of conditions and the following disclaimer.
+#  2. Redistributions in binary form must reproduce the above copyright
+#     notice, this list of conditions and the following disclaimer in the
+#     documentation and/or other materials provided with the distribution.
+#
+# THIS SOFTWARE IS PROVIDED BY THE AUTHORS ''AS IS'' AND ANY EXPRESS OR
+# IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
+# OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
+# IN NO EVENT SHALL THE AUTHORS OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT,
+# INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+# (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
+# LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
+# ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+# (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
+# THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+#
+# ------------------------------------------------------------------------------
+#
+# ------------------------------------------------------------------------------
+# Variables Console
+# ------------------------------------------------------------------------------
+
+###
+
+###
+# ------------------------------------------------------------------------------
+# Variables Read Only
+# ------------------------------------------------------------------------------
+
+
+readonly tool="pgtool"
+readonly cfg_dir="/etc/${tool}.d"
+readonly tmp_dir="/tmp/${tool}"
+readonly version="2.7"
+readonly last_available_version="140000"
+readonly min_supported_version="90610"
+readonly mainjobdate=$(date "+%Y%m%d")
+readonly read_mainjobdate=$(date +"%FT%X")
+readonly data_location="/var/lib/${tool}/internal"
+
+# ------------------------------------------------------------------------------
+# Variables Defaults
+# ------------------------------------------------------------------------------
+
+# Manage by options :
+
+backup_flag=false
+info_flag=false
+maintenance_flag=false
+restore_flag=false
+scan_flag=false
+starter_flag=false
+duplicate_flag=false
+for_standby=false
+upgrade_flag=false
+ressource_flag=false
+force_mode=false
+
+
+# Will be Overwritten by script
+
+cluster_name="null"
+dsn_info=""
+target_dsn_info=""
+is_full_param="(verbose)"
+method=""
+is_colored="false"
+from_file="no"
+migration_method="directory"
+
+
+
+
+# Can be Overwritten by configurations
+databases="all"
+dump_options=""
+scan_predict="true"
+tables=""
+tables_list=""
+dump_partial=""
+log_output_format="classic"
+max_compress_days=2
+max_suppression_days=7
+maintenance_period=7
+maintenance_ratio=75
+dryrun="no"
+log_directory="/var/log/${tool}"
+with_global=false
+backup_directory="/var/lib/${tool}/"
+logical_backup_retention=7
+logical_backup_retention_method="days"
+physical_backup_tool="pg_basebackup"
+physical_backup_retention=2
+physical_backup_retention_method="count"
+pgtool_stat_collector_max_size="50M"
+pgbackrest_log_console=""
+pg_basebackup_log_console=""
+nb_jobs=1
+default_start_date=$(date +"%Y-%m-%d %H:%M:%S %Z" -d@$(date +%s))
+compare_type="relations"
+isverbose="false"
+# ------------------------------------------------------------------------------
+#  Functions
+# ------------------------------------------------------------------------------
+
+function f_usage(){
+# REvision A1 : OK
+echo  "
+$(basename $0) ${version} - Usage command
+-----------------------------
+
+Usage : $(basename $0)  GENERAL_OPTIONS  TASKS_OPTIONS ...
+
+
+Standalone commands:
+
+   --lscluster
+   --chkcluster
+
+
+General options:
+
+   --cluster TEXT        Work on specified cluster ( must be present in clusters.conf and services.conf )
+
+   --verbose             Enable verbose mode
+   --quiet               Disable console output
+   --from-file
+   --help                Show this help
+
+Management Options:
+
+   --generate            Generate cluster configuration based on template
+
+Informations options:
+
+   --info                Display informations
+                                 o details :
+                                 o crma :
+                                 o config :
+                                 o check :
+
+Backup Options:
+
+   --backup TEXT         Launch backup task on specified cluster [ logical | auto | full | diff | incr | expire | conf ]
+                                 o logical : perform export on specified db
+                                 o auto : perform low-level backup based on week day
+                                 o full | diff | incr : perform low-level of specified type not supported by basebackup tool
+                                 o expire : manage  low-level ( basebackup ) backup based on method retention and retention value
+                                 o expirelogical : manage logical backup based on retention value
+                                 o conf : perform backup of globals and configuration files
+                                 o infological
+                                 o info
+   --databases TEXT      Execute COMMANDS on specified databases ( DEFAULT : all )
+   --with-global         When a  backup is performed , backup also global and config file [ On remote host ssh-key is needed ]
+
+Maintenance options:
+
+   --maintenance TEXT    Launch maintenance task on specified cluster [ vacuum | reindex | analyze | logcleaner ]
+                                 o vacuum : perform vacuum on specified db
+                                 o reindex : perform reindex on specified db
+                                 o analyze : perform stats compute on specified db
+                                 o pgtooldb :
+   --windows             Determine max time of a maintenance task ( in Minutes )
+   --databases TEXT      Execute COMMANDS on specified databases ( DEFAULT : all )
+   --full                     When execute a vacuum task precise it a FULL
+
+Scan Options:
+
+   --scan TEXT           Launch scan on the specified cluster [ live | export | log | expire ]
+                                 o live : display informations from multiple queries :
+                                    - running queries : display current running sessions [ active or idle in transaction ]  refresh each TARGET_TIME value with limit at VALUE
+                                    - blocked queries : display current blocked sessions refresh each TARGET_TIME value with limit at VALUE
+                                    - replication sessions : display replication informations in live
+                                    - all : display all in the same screen
+                                 o export : export the ouput of queries in ${tmp_dir} with a specifid tag
+                                 o log : scan logfile in the log_directory and display number of common errors
+                                 o expire :
+   --target-time INT
+   --value INT
+
+   --duplicate TEXT      Launch datas copies from a specified cluster [ db | cluster ]
+                                 o db : perform copy of all or a specified db
+                                 o cluster : perform a base copy of a cluster to a specified directory , source and target must be specified
+                                 o migrate :
+
+
+   Examples :
+   --------------------
+   - To list cluster live information :
+     $(basename ${0}) --cluster CLUSTER_NAME --info check
+
+   - To Check all clusters :
+     $(basename ${0}) --alive
+
+   - To show details informations for a specific CLUSTER_NAME :
+     $(basename ${0})  --cluster CLUSTER_NAME --info details
+
+   - To backup logical a specific CLUSTER_NAME  :
+     $(basename ${0}) --cluster CLUSTER_NAME --backup logical
+
+   - To backup low-level a specific CLUSTER_NAME  :
+     $(basename ${0}) --cluster CLUSTER_NAME --backup full
+
+   - To vaccum a specific CLUSTER_NAME withing time windows ( 1 hour ) :
+     $(basename ${0}) --cluster CLUSTER_NAME --maintenance vacuum --windows 60
+
+
+"| more
+exit 0
+}
+
+function f_requirements(){
+# Revision  A1 : OK
+
+if [ ! -d "${data_location}" ]; then
+
+  output=$(mkdir -p "${data_location}" 2>&1 )
+  if [ $? -ne 0 ]; then
+    f_log failed "${tool}" "Failed to create ${data_location} : ${output}"
+    exit 0
+  fi
+ # chown $(whoami) "${data_location}"
+fi
+
+if [ ! -d "${cfg_dir}" ]; then
+ output=$(mkdir -p "${cfg_dir}" 2>&1)
+ if [ $? -ne 0 ]; then
+   f_log failed "${tool}" "Failed to create ${cfg_dir} : ${output} "
+   exit 0
+ fi
+ # chown $(whoami):${sys_cluster_owner} "${cfg_dir}"
+fi
+
+if [ ! -d "${tmp_dir}" ]; then
+  output=$(mkdir -p "${tmp_dir}" 2>&1)
+  if [ $? -ne 0 ]; then
+    f_log failed "${tool}" "Failed to create ${tmp_dir} : ${output} "
+    exit 0
+  fi
+
+ # chown $(whoami):${sys_cluster_owner} "${cfg_dir}"
+fi
+
+# Ajout bzip2
+
+}
+
+function f_check_lock(){
+# Revsion A1 : OK
+current_cluster=$1
+if [ -f "${tmp_dir}/${current_cluster}.lock" ]; then
+   PID=$(cat "${tmp_dir}/${current_cluster}.lock" 2> /dev/null )
+   f_log failed "${current_cluster}" "A job is already running with PID : ${PID} ..."
+   exit 2
+fi
+echo $$ > "${tmp_dir}/${current_cluster}.lock"
+
+}
+
+function f_lscluster(){
+  find  ${cfg_dir} -type f -name "*.cfg" | while read cfg
+  do
+  cluster=$(basename -s .cfg ${cfg}  )
+  echo "${cluster}"
+  done
+}
+
+function f_create_pgtool_db(){
+
+echo "
+DROP DATABASE IF EXISTS ${tool} ;
+DROP ROLE IF EXISTS ${tool} ;
+CREATE ROLE ${tool} login ;
+CREATE DATABASE ${tool} OWNER ${tool} ;
+\c ${tool} postgres
+CREATE EXTENSION file_fdw ;
+CREATE SERVER backup_history foreign data wrapper file_fdw ;
+CREATE SERVER maintenance_history foreign data wrapper file_fdw ;
+CREATE SERVER refresh_history foreign data wrapper file_fdw ;
+CREATE SERVER stat_bgwriter_history foreign data wrapper file_fdw ;
+CREATE SERVER stat_databases_history  foreign data wrapper file_fdw ;
+CREATE SERVER statio_inner_database_tables_history foreign data wrapper file_fdw ;
+CREATE SERVER statio_inner_database_indexes_history foreign data wrapper file_fdw ;
+" > ${tmp_dir}/${cluster_name}.sql
+
+case ${target_cluster} in
+"")
+target_cluster="all knowned clusters"
+f_lscluster | while read cluster
+do
+echo "
+CREATE SCHEMA \"${cluster}\" ;
+ALTER SCHEMA \"${cluster}\" OWNER TO ${tool} ;
+SET SEARCH_PATH=\"${cluster}\"  ;
+
+CREATE FOREIGN TABLE backup_history (
+job_label bigint,
+start_time timestamp(3) with time zone,
+end_time timestamp(3) with time zone,
+input_tool varchar(15) ,
+object_name varchar(30) ,
+duration integer ,
+state varchar(20) ,
+object_size bigint)
+SERVER backup_history
+OPTIONS ( filename '${data_location}/${cluster}/backup.csv', format 'csv'  , DELIMITER ';')
+;
+
+CREATE FOREIGN TABLE maintenance_history (
+job_label bigint,
+start_time timestamp(3) with time zone,
+end_time timestamp(3) with time zone,
+input_tool varchar(30) ,
+datname varchar(30) ,
+treated integer ARRAY default null ,
+relname varchar(100) ,
+state varchar(20) ,
+duration integer )
+SERVER maintenance_history
+OPTIONS ( filename '${data_location}/${cluster}/maintenance.csv', format 'csv' , DELIMITER ';')
+;
+
+
+CREATE FOREIGN TABLE refresh_history (
+job_label bigint,
+start_time timestamp(3) with time zone,
+end_time timestamp(3) with time zone,
+input_tool varchar(15) ,
+object_name varchar(30) ,
+duration integer ,
+source varchar(50),
+target varchar(50),
+state varchar(10) )
+SERVER refresh_history
+OPTIONS ( filename '${data_location}/${cluster}/refresh.csv', format 'csv' , DELIMITER ';')
+;
+
+CREATE FOREIGN TABLE stat_bgwriter_history (
+ job_label bigint,
+ checkpoints_timed bigint ,
+ checkpoints_req bigint ,
+ checkpoint_write_time double precision,
+ checkpoint_sync_time double precision,
+ buffers_checkpoint bigint,
+ buffers_clean bigint,
+ maxwritten_clean bigint,
+ buffers_backend bigint,
+ buffers_backend_fsync bigint,
+ buffers_alloc bigint,
+ stats_reset timestamp(3) with time zone )
+ SERVER stat_bgwriter_history
+ OPTIONS ( filename '${data_location}/${cluster}/stat_bgwriter_history.csv', format 'csv' , DELIMITER ';')
+ ;
+
+ CREATE FOREIGN TABLE stat_databases_retro_history (
+  job_label varchar(30),
+  datid   oid,
+   datname   name ,
+   numbackends  integer ,
+   xact_commit bigint ,
+   xact_rollback  bigint ,
+   blks_read   bigint ,
+   blks_hit  bigint ,
+   tup_returned bigint ,
+   tup_fetched bigint ,
+   tup_inserted  bigint ,
+   tup_updated   bigint ,
+   tup_deleted  bigint ,
+   conflicts   bigint ,
+   temp_files  bigint ,
+   temp_bytes   bigint ,
+   deadlocks   bigint ,
+   blk_read_time  double precision ,
+   blk_write_time   double precision ,
+   stats_reset timestamp(3) with time zone)
+ SERVER stat_databases_history
+ OPTIONS ( filename '${data_location}/${cluster}/stat_databases_history.csv', format 'csv' , DELIMITER ';')
+ ;
+
+CREATE FOREIGN TABLE stat_databases_history (
+ job_label varchar(30),
+   datid   oid,
+  datname   name ,
+  numbackends  integer ,
+  xact_commit bigint ,
+  xact_rollback  bigint ,
+  blks_read   bigint ,
+  blks_hit  bigint ,
+  tup_returned bigint ,
+  tup_fetched bigint ,
+  tup_inserted  bigint ,
+  tup_updated   bigint ,
+  tup_deleted  bigint ,
+  conflicts   bigint ,
+  temp_files  bigint ,
+  temp_bytes   bigint ,
+  deadlocks   bigint ,
+  checksum_failures  bigint ,
+  checksum_last_failure  timestamp(3) with time zone ,
+  blk_read_time  double precision ,
+  blk_write_time   double precision ,
+  stats_reset timestamp(3) with time zone)
+SERVER stat_databases_history
+OPTIONS ( filename '${data_location}/${cluster}/stat_databases_history.csv', format 'csv' , DELIMITER ';')
+;
+
+CREATE FOREIGN TABLE statio_inner_database_tables_history (
+  job_label varchar(30),
+  datname name ,
+  relid oid ,
+  schemaname name,
+  relname name ,
+  heap_blks_read bigint ,
+  heap_blks_hit  bigint,
+  idx_blks_read  bigint,
+  idx_blks_hit   bigint,
+  toast_blks_read bigint,
+  toast_blks_hit bigint,
+  tidx_blks_read bigint,
+  tidx_blks_hit  bigint,
+  type varchar(20) )
+  SERVER statio_inner_database_tables_history
+  OPTIONS ( filename '${data_location}/${cluster}/statio_inner_database_tables_history.csv', format 'csv' , DELIMITER ';')
+;
+CREATE FOREIGN TABLE statio_inner_database_indexes_history (
+  job_label varchar(30),
+  datname name ,
+  relid    oid    ,
+  indexrelid  oid    ,
+  schemaname name   ,
+  relname     name   ,
+  indexrelname  name   ,
+  idx_blks_read  bigint ,
+  idx_blks_hit  bigint )
+  SERVER statio_inner_database_indexes_history
+  OPTIONS ( filename '${data_location}/${cluster}/statio_inner_database_indexes_history.csv', format 'csv' , DELIMITER ';')
+;
+ALTER FOREIGN TABLE backup_history OWNER TO pgtool ;
+ALTER FOREIGN TABLE maintenance_history OWNER TO pgtool ;
+ALTER FOREIGN TABLE refresh_history OWNER TO pgtool ;
+ALTER FOREIGN TABLE stat_bgwriter_history OWNER TO pgtool ;
+ALTER FOREIGN TABLE stat_databases_history OWNER TO pgtool ;
+ALTER FOREIGN TABLE statio_inner_database_tables_history OWNER TO pgtool ;
+ALTER FOREIGN TABLE statio_inner_database_indexes_history OWNER TO pgtool ;
+CREATE VIEW last_logical_backup as
+  WITH tb AS (select object_name,end_time,case when (max(end_time) > now() - INTERVAL '1 day') then 'OK' else 'KO' end   from backup_history where input_tool like 'pg_dump%'  group by object_name,end_time having end_time > now() - INTERVAL '5 day' order by end_time desc )
+  select tb.object_name,max(tb.end_time),tb.case from tb group by tb.object_name,tb.case  ;
+
+CREATE VIEW last_physical_backup as
+  WITH tb AS (select object_name,end_time,case when (max(end_time) > now() - INTERVAL '1 day') then 'OK' else 'KO' end   from backup_history where input_tool like 'pg_ba%'  group by object_name,end_time having end_time > now() - INTERVAL '5 day' order by end_time desc )
+  select tb.object_name,max(tb.end_time),tb.case from tb group by tb.object_name,tb.case  ;
+" >> ${tmp_dir}/${cluster_name}.sql
+done
+;;
+*)
+for cluster in $(echo "${target_cluster}" | tr ',' '\n')
+do
+
+echo "
+
+CREATE SCHEMA \"${cluster}\" ;
+ALTER SCHEMA \"${cluster}\" OWNER TO ${tool} ;
+SET SEARCH_PATH=\"${cluster}\"  ;
+
+CREATE FOREIGN TABLE backup_history (
+job_label varchar(30),
+start_time timestamp(3) with time zone,
+end_time timestamp(3) with time zone,
+input_tool varchar(15) ,
+object_name varchar(30) ,
+duration integer ,
+state varchar(20) ,
+object_size bigint)
+SERVER backup_history
+OPTIONS ( filename '${data_location}/${cluster}/backup.csv', format 'csv'  , DELIMITER ';')
+;
+
+CREATE FOREIGN TABLE maintenance_history (
+job_label varchar(30),
+start_time timestamp(3) with time zone,
+end_time timestamp(3) with time zone,
+input_tool varchar(15) ,
+datname varchar(30) ,
+treated integer ARRAY default null ,
+tblname varchar(100) ,
+state varchar(20) ,
+duration integer )
+SERVER maintenance_history
+OPTIONS ( filename '${data_location}/${cluster}/maintenance.csv', format 'csv' , DELIMITER ';')
+;
+
+CREATE FOREIGN TABLE refresh_history (
+job_label varchar(30),
+start_time timestamp(3) with time zone,
+end_time timestamp(3) with time zone,
+input_tool varchar(30) ,
+object_name varchar(30) ,
+duration integer ,
+source varchar(50),
+target varchar(50),
+state varchar(10) )
+SERVER refresh_history
+OPTIONS ( filename '${data_location}/${cluster}/refresh.csv', format 'csv' , DELIMITER ';')
+;
+
+CREATE FOREIGN TABLE stat_bgwriter_history (
+ job_label varchar(30),
+ checkpoints_timed bigint ,
+ checkpoints_req bigint ,
+ checkpoint_write_time double precision,
+ checkpoint_sync_time double precision,
+ buffers_checkpoint bigint,
+ buffers_clean bigint,
+ maxwritten_clean bigint,
+ buffers_backend bigint,
+ buffers_backend_fsync bigint,
+ buffers_alloc bigint,
+ stats_reset timestamp with time zone )
+ SERVER stat_bgwriter_history
+ OPTIONS ( filename '${data_location}/${cluster}/stat_bgwriter_history.csv', format 'csv' , DELIMITER ';')
+ ;
+
+CREATE FOREIGN TABLE stat_databases_history (
+job_label varchar(30),
+  datid   oid,
+  datname   name ,
+  numbackends  integer ,
+  xact_commit bigint ,
+  xact_rollback  bigint ,
+  blks_read   bigint ,
+  blks_hit  bigint ,
+  tup_returned bigint ,
+  tup_fetched bigint ,
+  tup_inserted  bigint ,
+  tup_updated   bigint ,
+  tup_deleted  bigint ,
+  conflicts   bigint ,
+  temp_files  bigint ,
+  temp_bytes   bigint ,
+  deadlocks   bigint ,
+  checksum_failures  bigint ,
+  checksum_last_failure  timestamp with time zone ,
+  blk_read_time  double precision ,
+  blk_write_time   double precision ,
+  stats_reset timestamp with time zone)
+  SERVER stat_databases_history
+  OPTIONS ( filename '${data_location}/${cluster}/stat_databases_history.csv', format 'csv' , DELIMITER ';')
+;
+
+
+ CREATE FOREIGN TABLE stat_databases_retro_history (
+  job_label varchar(30),
+  datid   oid,
+   datname   name ,
+   numbackends  integer ,
+   xact_commit bigint ,
+   xact_rollback  bigint ,
+   blks_read   bigint ,
+   blks_hit  bigint ,
+   tup_returned bigint ,
+   tup_fetched bigint ,
+   tup_inserted  bigint ,
+   tup_updated   bigint ,
+   tup_deleted  bigint ,
+   conflicts   bigint ,
+   temp_files  bigint ,
+   temp_bytes   bigint ,
+   deadlocks   bigint ,
+   blk_read_time  double precision ,
+   blk_write_time   double precision ,
+   stats_reset timestamp(3) with time zone)
+ SERVER stat_databases_history
+ OPTIONS ( filename '${data_location}/${cluster}/stat_databases_history.csv', format 'csv' , DELIMITER ';')
+ ;
+
+CREATE FOREIGN TABLE statio_inner_database_tables_history (
+  job_label varchar(30),
+  datname name ,
+  relid oid ,
+  schemaname name,
+  relname name ,
+  heap_blks_read bigint ,
+  heap_blks_hit  bigint,
+  idx_blks_read  bigint,
+  idx_blks_hit   bigint,
+  toast_blks_read bigint,
+  toast_blks_hit bigint,
+  tidx_blks_read bigint,
+  tidx_blks_hit  bigint,
+    type varchar(20)  )
+  SERVER statio_inner_database_tables_history
+  OPTIONS ( filename '${data_location}/${cluster}/statio_inner_database_tables_history.csv', format 'csv' , DELIMITER ';')
+;
+CREATE FOREIGN TABLE statio_inner_database_indexes_history (
+  job_label varchar(30),
+  datname name ,
+  relid    oid    ,
+  indexrelid  oid    ,
+  schemaname name   ,
+  relname     name   ,
+  indexrelname  name   ,
+  idx_blks_read  bigint ,
+  idx_blks_hit  bigint )
+  SERVER statio_inner_database_indexes_history
+  OPTIONS ( filename '${data_location}/${cluster}/statio_inner_database_indexes_history.csv', format 'csv' , DELIMITER ';')
+;
+ALTER FOREIGN TABLE backup_history OWNER TO pgtool ;
+ALTER FOREIGN TABLE maintenance_history OWNER TO pgtool ;
+ALTER FOREIGN TABLE refresh_history OWNER TO pgtool ;
+ALTER FOREIGN TABLE stat_bgwriter_history OWNER TO pgtool ;
+ALTER FOREIGN TABLE stat_databases_history OWNER TO pgtool ;
+ALTER FOREIGN TABLE statio_inner_database_tables_history OWNER TO pgtool ;
+ALTER FOREIGN TABLE statio_inner_database_indexes_history OWNER TO pgtool ;
+CREATE VIEW last_logical_backup as
+  WITH tb AS (select object_name,end_time,case when (max(end_time) > now() - INTERVAL '1 day') then 'OK' else 'KO' end   from backup_history where input_tool like 'pg_dump%'  group by object_name,end_time having end_time > now() - INTERVAL '5 day' order by end_time desc )
+  select tb.object_name,max(tb.end_time),tb.case from tb group by tb.object_name,tb.case  ;
+
+CREATE VIEW last_physical_backup as
+  WITH tb AS (select object_name,end_time,case when (max(end_time) > now() - INTERVAL '1 day') then 'OK' else 'KO' end   from backup_history where input_tool like 'pg_ba%'  group by object_name,end_time having end_time > now() - INTERVAL '5 day' order by end_time desc )
+  select tb.object_name,max(tb.end_time),tb.case from tb group by tb.object_name,tb.case  ;
+" >> ${tmp_dir}/${cluster_name}.sql
+done
+;;
+esac
+f_gather_config
+
+
+my_cmd="${binary_path}/psql ${dsn_info} -v ON_ERROR_STOP=1  -f ${tmp_dir}/${cluster_name}.sql "
+log_filename="${log_location}/create_pgtool_db.log"
+if [ "${isverbose}" == "true" ]; then
+[ -d "${log_location}" ] || mkdir -p ${log_location}
+f_log debug "${cluster_name}" "Running: ${my_cmd} ..."
+fi
+
+${my_cmd}  > ${log_filename} 2>&1
+if [ $? -eq 0 ]; then
+f_log success ${cluster_name} "${tool} Database created on ${cluster_name} for ${target_cluster} "
+else
+f_log failed ${cluster_name} "${tool} Database not created on ${cluster_name} for ${target_cluster} "
+fi
+[ -f ${tmp_dir}/${cluster_name}.sql ] && rm -f  ${tmp_dir}/${cluster_name}.sql
+
+}
+
+function f_showconfig(){
+
+local cluster=${1}
+
+find ${cfg_dir} -type f -name "${cluster}.cfg" | while read cfg
+do
+ mawk -F"=" -v TOOL=${tool} -v CLUSTER=$(basename -s .cfg ${cfg}) '
+BEGIN {
+  printf "\n ==  %s Configuration for : %-25s \n\n",TOOL,CLUSTER" =="
+}
+{
+if ( match($0,/^#/)){ next }
+if ( match($0,/^$/)){ next }
+PARAMS[$1]=$2
+}
+END {
+{
+printf "\nDSN Configuration :\n"
+printf "---------------------\n"
+printf "\t- %s : %s \n","username",PARAMS["username"]
+printf "\t- %s : %s \n","host",PARAMS["host"]
+printf "\t- %s : %s \n","sys_cluster_owner",PARAMS["sys_cluster_owner"]
+printf "\t- %s : %s \n","port",PARAMS["port"]
+printf "\nGlobal Configuration :\n"
+printf "------------------------\n"
+printf "\t- %s : %s \n","data_directory",PARAMS["data_directory"]
+printf "\t- %s : %s\n","postgresql_cluster_version",PARAMS["postgresql_cluster_version"]
+printf "\t- %s : %s\n","log_directory",PARAMS["log_directory"]
+printf "\t- %s : %s\n","role",PARAMS["role"]
+printf "\t- %s : %s\n","cluster_vip",PARAMS["cluster_vip"]
+printf "\t- %s : %s\n","databases",PARAMS["databases"]
+printf "\nBackup Configuration :\n"
+printf "------------------------\n"
+printf "\t- %s : %s\n","backup_directory",PARAMS["backup_directory"]
+printf "\t- %s : %s\n","logical_backup_retention",PARAMS["logical_backup_retention"]
+printf "\t- %s : %s\n","logical_backup_retention_method",PARAMS["logical_backup_retention_method"]
+printf "\t- %s : %s\n","physical_backup_retention",PARAMS["physical_backup_retention"]
+printf "\t- %s : %s\n","physical_backup_retention_method",PARAMS["physical_backup_retention_method"]
+printf "\t- %s : %s\n","physical_backup_tool",PARAMS["physical_backup_tool"]
+printf "\nMaintenance Configuration :\n"
+printf "-----------------------------\n"
+printf "\t- %s : %s\n","maintenance_period",PARAMS["maintenance_period"]
+printf "\t- %s : %s\n","log_output_format",PARAMS["log_output_format"]
+printf "\t- %s : %s\n","method",PARAMS["method"]
+printf "\t- %s : %s\n","maintenance_ratio",PARAMS["maintenance_ratio"]
+printf "\t- %s : %s\n","time_windows",PARAMS["time_windows"]
+printf "\t- %s : %s\n","max_compress_days",PARAMS["max_compress_days"]
+printf "\t- %s : %s\n","max_suppression_days",PARAMS["max_suppression_days"]
+}
+printf "\n"
+}'  ${cfg}
+done
+}
+
+function f_gather_config(){
+
+# local cluster_config=${1}
+
+if [  -f "${cfg_dir}/${cluster_name}.cfg" ]; then
+ source ${cfg_dir}/${cluster_name}.cfg
+ [ "${dbname}" != "null" ] && dbname=" --dbname=${dbname} " || dbname=""
+ dsn_info=" --host=${host} --port=${port} --user=${username} -X --pset=footer=off ${dbname} "
+ log_location=${log_directory}/${cluster_name}/${mainjobdate}
+ cluster_data_location=${data_location}/${cluster_name}
+ logical_backup_location=${backup_directory}/${cluster_name}/logical/${mainjobdate}
+ physical_backup_location=${backup_directory}/${cluster_name}/base
+
+ if [ ! -d "${log_location}" ]; then
+    output=$(mkdir -p ${log_location} 2>&1)
+    if [ $? -ne 0 ]; then
+     f_log failed ${cluster_name} "Failed to create ${log_location} : ${output} "
+   fi
+ fi
+ if [ ! -d "${cluster_data_location}" ]; then
+    output=$(mkdir -p ${cluster_data_location} 2>&1)
+    if [ $? -ne 0 ]; then
+     f_log failed ${cluster_name} "Failed to create ${cluster_data_location} : ${output} "
+   fi
+ fi
+ if [ ! -d "${logical_backup_location}" ]; then
+    output=$(mkdir -p ${logical_backup_location} 2>&1)
+    if [ $? -ne 0 ]; then
+     f_log failed ${cluster_name} "Failed to create ${logical_backup_location} : ${output} "
+   fi
+ fi
+ if [ ! -d "${physical_backup_location}" ]; then
+    output=$(mkdir -p ${physical_backup_location} 2>&1)
+    if [ $? -ne 0 ]; then
+     f_log failed ${logical_backup_location} "Failed to create ${physical_backup_location} : ${output} "
+   fi
+ fi
+
+ if [ -d "/usr/lib/postgresql/${postgresql_cluster_version}/bin/" ]; then
+    binary_path="/usr/lib/postgresql/${postgresql_cluster_version}/bin/"
+ elif [ -d "/usr/pgsql-${postgresql_cluster_version}/bin/" ]; then
+    binary_path="/usr/pgsql-${postgresql_cluster_version}/bin/"
+ elif [ -d "/usr/lib/postgresql/$(ls -1r /usr/lib/postgresql/ 2>/dev/null | cut -d"." -f 1 | sort -nur |head -n 1  )/bin/" ];then
+    binary_path="/usr/lib/postgresql/$(ls -1r /usr/lib/postgresql/ 2>/dev/null | cut -d"." -f 1 | sort -nur |head -n 1  )/bin/"
+ elif [ -d "/usr/pgsql-$(ls -1r /usr 2>/dev/null  |grep pgsql | cut -d"-" -f 2  | cut -d"." -f 1 | sort -nur |head -n 1 )/bin/" ]; then
+    binary_path="/usr/pgsql-$(ls -1r /usr 2>/dev/null  |grep pgsql | cut -d"-" -f 2  | cut -d"." -f 1 | sort -nur |head -n 1 )/bin/"
+ else
+   f_log failed "${cluster_name}" "Failed to get binary  in the PostgreSQL version ${postgresql_cluster_version} or superior "
+   exit 2
+ fi
+
+psql_connexion_cmd="${binary_path}/psql ${dsn_info}"
+existing=0
+else
+ f_log failed "${cluster_name}" "Cluster : ${cluster_name} not present in ${cfg_dir} "
+ existing=2
+fi
+return ${existing}
+}
+
+function f_modif_config(){
+
+postgresql_cluster_version=$(echo ${postgresql_cluster_version} | cut -d. -f 1,2)
+
+  mawk  -v cluster=${cluster_name}  -v datadir=${data_directory} -v version=${postgresql_cluster_version} -v file=${cfg_dir}/${cluster_name}.cfg '
+  BEGIN{split(version,t,".") ; if ( t[1] > 10 ) { version=t[1] } }
+   {
+  if ( match($0,/postgresql_cluster_version=null/)) { cmd="sed -i \"" NR "s/null$/" version "/\" " file ; system( cmd ); next  } ;
+  if ( match($0,/data_directory=null/)) { sdatadir=gsub(/\//,"\/",datadir) ; cmd="sed -i \"" NR "s/null$/" datadir "/\" " file ; system( cmd ); next  }  ;
+  }
+  END {} ' ${cfg_dir}/${cluster_name}.cfg
+
+}
+
+function f_log(){
+
+if [ "${is_colored}" == "true" ]; then
+
+local  color_green="\e[32m"
+local  color_red="\e[31m"
+local  color_cyan="\e[36m"
+local  color_yellow="\e[33m"
+local  color_magenta="\e[35m"
+local  color_normal="\e[39m"
+
+fi
+local trace="${1}"
+shift
+local object="${1}"
+shift
+local messages="${*}"
+local datelong=$(date "+%F %T")
+local dateshort=$(date "+%F")
+
+case ${trace} in
+	"info")
+	trace=" INFO    "
+  COLOR=${color_cyan}
+	;;
+	"debug")
+	trace=" DEBUG   "
+  COLOR=${color_magenta}
+	;;
+	"warning")
+	trace=" WARNING "
+  COLOR=${color_yellow}
+	;;
+	"success")
+	trace=" SUCCESS "
+  COLOR=${color_green}
+	;;
+	"failed")
+	trace=" FAILED  "
+  COLOR=${color_red}
+	;;
+  "fatal")
+	trace=" FATAL   "
+  COLOR=${color_red}
+	;;
+esac
+
+[ -d "${log_directory}" ] || mkdir -p ${log_directory}
+case ${log_output_format} in
+classic)
+echo -e "[${datelong}] [${COLOR}${trace}${color_normal}] [ ${object} ] ${messages}"
+echo "[${datelong}] [${trace}] [ ${object} ] ${messages}" >> ${log_directory}/pgtool.log
+;;
+csv)
+echo -e "[${datelong}] [${COLOR}${trace}${color_normal}] [ ${object} ] ${messages}"
+echo "${datelong};${trace};${object};${messages}" >> ${log_directory}/${object}.csv
+;;
+file)
+echo "[${datelong}] [${trace}] [ ${object} ] ${messages}" >> ${log_directory}/pgtool.log
+;;
+console)
+echo -e "[${datelong}] [${COLOR}${trace}${color_normal}] [ ${object} ] ${messages}"
+;;
+*)
+echo -e "[${datelong}] [${COLOR}${trace}${color_normal}] [ ${object} ] ${messages}"
+echo "[${datelong}] [${trace}] [ ${object} ] ${messages}" >> ${log_directory}/pgtool.log
+esac
+}
+
+function f_generate(){
+  # f_requirements
+  local cluster_config=${1}
+  local is_present=0
+  f_lscluster  | ( while read cluster
+  do
+    [ "${cluster}" == "${cluster_config}" ] && is_present=1
+  done
+  if [ ${is_present} -eq 0 ]; then
+   echo "
+# ------------------------------------------ #
+#  ${tool}  configuration file
+# ------------------------------------------ #
+#
+# Cluster Name :  ${cluster_config}
+#
+# ------------------------------------------------------------------------------------
+# CONNECTIONS
+# ------------------------------------------------------------------------------------
+
+port=null
+						                                          # Port number
+host=localhost
+						                                          # Hostname
+username=postgres
+						                                          # Database user ( must be super_user )
+
+replication_username=postgres
+						                                          # Replication  user ( must be replication )
+
+dbname=null
+						                                          # Datase name used for connection
+postgresql_cluster_version=null
+						                                          # PostgreSQL version , can be set
+						                                          # but it automaticly updated by :
+						                                          # pgtool --list
+data_directory=null
+						                                          # PostgreSQL datadir, can be set
+						                                          # but its automatically updated by :
+						                                          # pgtool --list
+role=std
+						                                          # Current state of the cluster .
+						                                          # Not automaticaly updated
+
+# ------------------------------------------------------------------------------------
+# GLOBAL
+# ------------------------------------------------------------------------------------
+
+databases=all
+						                                          # list of the databases to interact with :
+						                                          # all for all dbs or comma-separted list
+log_output_format=classic
+						                                          # Manage output format of the logs
+log_directory=/var/log/pgtool
+						                                          # Directoy where logs are send
+
+# ------------------------------------------------------------------------------------
+# BACKUP
+# ------------------------------------------------------------------------------------
+
+backup_directory=/var/lib/pgtool
+						                                          # Directory where backup made by
+						                                          # pgtool are send
+logical_backup_retention=5
+						                                          # Logical retention limit
+logical_backup_retention_method=days
+						                                          # Logical retention method
+physical_backup_tool=pg_basebackup
+						                                          # Tool used for lowlevel backup
+						                                          # can be :
+						                                          #   - pgbackrest
+						                                          #   - pg_basebackup
+						                                          #   - pitrery [ WIP ]
+physical_backup_retention_method=count
+						                                          # Type of rotation apply to lowlevel
+						                                          			# backup. Used only on pg_basebackup
+physical_backup_retention=2
+						                                          # Lowlevel retention limit depends on
+						                                          # physical_backup_retention_method
+
+# ------------------------------------------------------------------------------------
+# MAINTENANCE
+# ------------------------------------------------------------------------------------
+
+pgtool_stat_collector_max_size=50M                    # Max size for collector file :
+                                                      #  N[bcwkMG]
+
+
+time_windows=30
+						                                          # Max time allowed for maintenance task
+						                                          # unit in minute
+maintenance_period=7
+						                                          # Value for maintencnce tasks used with
+						                                          # method : days
+maintenance_ratio=75
+						                                          # Value for maintenance tasks used with
+						                                          # method : ratio
+method=days
+
+max_compress_days=2
+						                                          # Max days of log in PostgreSQL Log
+						                                          # directory to keep . Beyond it will
+						                                          # compressed
+max_suppression_days=7
+						                                          # Max days of compressed logs in
+						                                          # PostgreSQL log directory to keep.
+						                                          # Beyond it will be dropped
+cluster_vip=null
+						                                          # Virtual IP check for starter function
+cluster_chk_user=null
+						                                          # RDBMS user allow to check if the state
+						                                          # of the PostgreSQL Cluster
+						                                          # if null => postgres will be used
+# ------------------------------------------------------------------------------------
+# RESSOURCE MANAGEMENT
+# ------------------------------------------------------------------------------------
+
+# service_name=${cluster_config}
+						                                          # Service name used for start or stop the
+						                                          # PostgreSQL . If comment , pg_ctl will
+						                                          # be used
+
+# ------------------------------------------------------------------------------------
+# PGTOOL DATABASE
+# ------------------------------------------------------------------------------------
+
+# pgtool_port=null
+
+# pgtool_host=null
+
+# pgtool_usename=null
+
+# pgtool_sys_cluster_owner=null
+
+# ------------------------------------------------------------------------------------
+# CUSTOM
+# ------------------------------------------------------------------------------------
+
+# sql_directory=null
+						                                          # Directory where sql script are stored
+# sql_user=null
+						                                          # Username to use for execute the SQL >>  TO CANCEL
+# sql_dbname=null
+						                                          # sql script will be execute on this DB >>  TO CANCEL
+
+
+# ------------------------------------------ #
+
+" >> ${cfg_dir}/${cluster_config}.cfg
+   f_log success "${cluster_config}" "Cluster ${cluster_config} added and active in ${cfg_dir}/${cluster_config}.cfg "
+   f_log warning "${cluster_config}" "After file modification , please run this to update configuration : pgtool --cluster ${cluster_config} --info check "
+   mkdir ${data_location}/${cluster_config} 2>/dev/null
+   touch ${data_location}/${cluster_config}/{backup.csv,maintenance.csv,refresh.csv,stat_bgwriter_history.csv,stat_database_history.csv,statio_inner_database_tables_history.csv,statio_inner_database_indexes_history.csv}
+
+  else
+   f_log failed "${cluster_config}" "Cluster ${cluster_config} seems already present and active in ${cfg_dir}/${cluster_config}.cfg"
+   exit 2
+  fi
+ )
+
+}
+
+function f_canceled(){
+
+  if [ "${backup_flag}" == "true" ]; then
+       job="backuping => some cleanup while be necessary"
+    duration=$(($(date +%s)-$(date +%s -d "${default_start_date}" )))
+   echo "${jobdate};${default_start_date};$(date +"%Y-%m-%d %H:%M:%S %Z" -d@$(date +%s));pg_dump;while_running_task;$duration;canceled;0"  >> ${data_file}
+  fi
+
+  if [ "${restore_flag}" == "true" ]; then
+
+   job="restoring => some cleanup while be necessary"
+  fi
+
+  if [ "${upgrade_flag}" == "true" ]; then
+   job="upgrading => ANALYZE IS MANDATORY !!!! "
+  fi
+
+  if [ "${info_flag}" == "true" ]; then
+    job="retrieveing informations => no real impact"
+  fi
+
+  if [ "${maintenance_flag}" == "true" ]; then
+    job="vacuum or analyze or reindex DB(s) => survey FS space usage "
+    db=$( head -1 ${tmp_dir}/${cluster_name}_${to_perform}.status 2>/dev/null )
+    table_ok=$(grep -c "success" ${tmp_dir}/${cluster_name}_${to_perform}.status 2>/dev/null  )
+    [ -z "${table_ok}" ] && table_ok=0
+    table_ko=$(grep -c "failed" ${tmp_dir}/${cluster_name}_${to_perform}.status  2>/dev/null  )
+    [ -z "${table_ko}" ] && table_ko=0
+    let "nb_tables=(${table_ok}+${table_ko})"
+    duration=$(($(date +%s)-$(date +%s -d "${default_start_date}" )))
+    echo "${jobdate};${default_start_date};$(date +"%Y-%m-%d %H:%M:%S %Z" -d@$(date +%s));${to_perform};$db;{${table_ok},${table_ko},${nb_tables}};;canceled;${duration}"  >> ${data_file}
+    rm -f ${tmp_dir}/${cluster_name}_${to_perform}.status
+  fi
+
+  if [ "${generate_flag}" == "true" ]; then
+    job="generating cluster configuration "
+  fi
+
+  if [ "${scan_flag}" == "true" ]; then
+    job="scanning  cluster  "
+  fi
+
+f_log fatal "${tool}" "Tasks canceled while ${job} ... "
+
+exit 2
+}
+
+function f_test_connection(){
+
+# Revision A1 avec
+# ajout outdirector
+# Test : OK
+local is_reachable
+# log_filename="${log_directory}/access.log"
+
+
+# [ -z ${server_version_num} ] && server_version_num=0
+${binary_path}/psql ${dsn_info} -t -A -F";" -c "set application_name=pgtool ; select 0 " > /dev/null  2>&1
+if [ ${?} -eq 0 ]; then
+ is_reachable=0
+  server_version_num=$( ${psql_connexion_cmd} -t -A -c "select current_setting('server_version_num')" 2>/dev/null)
+  if [ ${server_version_num} -lt ${min_supported_version} ]; then
+   f_log fatal "${cluster_name}" "Actual PG Version $server_version_num is not supported. Upgrade to ${min_supported_version} minimum."
+   exit 2
+  fi
+else
+ # echo "${tool};${port};$(date +'%F %T');KO" 2> /dev/null >> ${log_filename}
+ is_reachable=2
+fi
+return ${is_reachable}
+
+}
+
+function f_connect(){
+
+# f_gather_config || exit 2
+
+#psql_connexion_cmd="${binary_path}/psql ${dsn_info}"
+if f_test_connection ; then
+${psql_connexion_cmd} -X -v ON_ERROR_STOP=1 -v "PROMPT1=[%M:%>][%n@%/]%R%#%x "
+fi
+
+}
+
+function f_manage_ressource(){
+
+    f_gather_config || exit 2
+    if [[ ! ${host} =~ 127.0.0.1 ]] && [[ ! ${host} =~ localhost ]] && [[ ! ${host} =~ run ]]; then
+    f_log warning ${cluster_name} "Can't perform START / STOP on remote host "
+    exit 2
+    fi
+
+      log_filename="${log_location}/ressource.log"
+      if [ -f "${binary_path}/pg_ctl" ]; then
+         ctl_cmd="${binary_path}/pg_ctl "
+      else
+        f_log failed "${cluster_name}" "Failed to get binary pg_ctl in the PostgreSQL version ${postgresql_cluster_version} "
+        exit 2
+      fi
+    case ${state_objective} in
+    start)
+    if [ ! -z "${service_name}" ]; then
+       f_log info ${cluster_name} "PostgreSQL Cluster : ${state_objective} by service "
+       my_cmd="systemctl start ${service_name}"
+    else
+      f_log info ${cluster_name} "PostgreSQL Cluster : ${state_objective} by pg_ctl "
+      my_cmd="${ctl_cmd} start -D ${data_directory}"
+    fi
+
+      ${my_cmd} > ${log_filename} 2>&1
+      service_name=""
+      if f_test_connection; then
+         f_log success ${cluster_name} "PostgreSQL Cluster is UP and OPEN "
+      else
+         f_log failed  ${cluster_name} "PostgreSQL Cluster is not UP and OPEN "
+      fi
+    ;;
+    stop)
+    if [ ! -z "${service_name}" ]; then
+       f_log info ${cluster_name} "PostgreSQL Cluster : ${state_objective} by service "
+       my_cmd="systemctl stop ${service_name}"
+    else
+      f_log info ${cluster_name} "PostgreSQL Cluster : ${state_objective} by pg_ctl "
+      my_cmd="${ctl_cmd} stop -D ${data_directory} "
+    fi
+
+    ${my_cmd} > ${log_filename} 2>&1
+    service_name=""
+      if ! f_test_connection; then
+         f_log success ${cluster_name} "PostgreSQL Cluster is not UP and OPEN "
+      else
+         f_log failed  ${cluster_name} "PostgreSQL Cluster is UP and OPEN "
+      fi
+    ;;
+    reload)
+    if [ ! -z "${service_name}" ]; then
+       f_log info ${cluster_name} "PostgreSQL Cluster : ${state_objective} by service "
+       my_cmd="systemctl reload ${service_name}"
+    else
+      f_log info ${cluster_name} "PostgreSQL Cluster : ${state_objective} by pg_ctl "
+      my_cmd=" ${ctl_cmd} reload -D ${data_directory}"
+    fi
+    ;;
+    restart)
+    if [ ! -z "${service_name}" ]; then
+       f_log info ${cluster_name} "PostgreSQL Cluster : ${state_objective} by service "
+       my_cmd="systemctl reload ${service_name}"
+    else
+      f_log info ${cluster_name} "PostgreSQL Cluster : ${state_objective} by pg_ctl "
+      my_cmd=" ${ctl_cmd} restart -D ${data_directory} "
+    fi
+    ;;
+    esac
+}
+
+# --------------------
+#  Section : Check
+
+function f_list(){
+# f_requirements
+
+
+    # Resetting Variables :
+    dateshort=$(date "+%F")
+    port="-"
+    server="-"
+    postgresql_cluster_version="-"
+    data_directory="-"
+    state="stopped"
+    openmode="-"
+    is_primary="-"
+    is_secondary="-"
+    isgetvip="-"
+    run_job="-"
+
+    f_gather_config || exit 2
+    #psql_connexion_cmd="${binary_path}/psql ${dsn_info}"
+
+    if f_test_connection ; then
+        # Get version
+        postgresql_cluster_version=$( ${psql_connexion_cmd} -t -A  -c "select split_part(current_setting('server_version'),' ',1) ;"  2> /dev/null || postgresql_cluster_version="-" )
+        port=$( ${psql_connexion_cmd} -t -A  -c  "show port"  2> /dev/null || port="-" )
+        state="started"
+        server=$( ${psql_connexion_cmd} -t -A  -c  "select  case when  inet_server_addr() = '::1' then '127.0.0.1' when inet_server_addr() is null then '127.0.0.1' else inet_server_addr() end as addr "  2> /dev/null )
+        # [ -z "${data_directory}" ] &&  data_directory="-"
+
+        # Get Datadirectory
+        data_directory=$(  ${psql_connexion_cmd}  -t -A  -c "show data_directory"  2> /dev/null )
+        # [ -z "${data_directory}" ] &&  data_directory="-"
+         # Get Backup Infomrations
+        openmode=$(  ${psql_connexion_cmd}  -t -A  -c "select case when pg_is_in_recovery() then 'READ_ONLY' else 'READ_WRITE' end as openmode ;"  2> /dev/null  )
+        [ -z "${openmode}" ] &&  openmode="-"
+        # Get Replication informations
+        is_primary=$( ${psql_connexion_cmd} -t -A  -c "select case when count(pid) >= 1 then 'yes' else 'no' end from pg_stat_replication where state in ('startup','catchup','streaming') " 2> /dev/null  )
+        [ -z "${is_primary}" ] &&  is_primary="-"
+        if [ "${openmode}" == "READ_ONLY" ]; then
+     	     is_secondary="yes"
+        fi
+        if [ "${is_primary}" == "yes" ] && [ "${is_secondary}" == "yes" ]; then
+           openmode="CASCADING"
+        fi
+
+        # Get vIP Information
+
+        if [ "${cluster_vip}" != "null" ]; then
+           vIP=$(ip -f inet -o a | mawk -v vIP=${cluster_vip} 'BEGIN{mounted="false";} { if ($0 ~ vIP) {mounted="true" ;}} END { printf "%s",mounted; }')
+           if [ "${vIP}" == "true" ]; then
+              isgetvip="true"
+            else
+              isgetvip="false"
+           fi
+        fi
+
+        if [ -f ${tmp_dir}/${cluster_name}.lock ]; then
+           run_job="true"
+        fi
+
+    fi
+
+echo "${cluster_name};${state};${port};${server};${postgresql_cluster_version};${data_directory};${openmode};${role};${is_primary};${is_secondary};${isgetvip};${run_job}" > ${tmp_dir}/$$.tmp
+
+  # f_modif_config ${cluster_name} ${data_directory} ${postgresql_cluster_version}
+# Modify configuration file
+f_modif_config
+
+test -f ${tmp_dir}/$$.tmp && awk -F";" '{
+  printf "\n == Informations from : %s ==\n\n",$1
+  printf "\t- %-15s : %s \n","State",$2
+  printf "\t- %-15s : %s \n","Port",$3
+  printf "\t- %-15s : %s \n","Host",$4
+  printf "\t- %-15s : %s \n","PG_Version",$5
+  printf "\t- %-15s : %s \n","Data_directory",$6
+  printf "\t- %-15s : %s \n","Open_Mode",$7
+  printf "\t- %-15s : %s \n","Role",$8
+  printf "\t- %-15s : %s \n","Is_Primary_in_replication",$9
+  printf "\t- %-15s : %s \n","Is_Secondary",$10
+  printf "\t- %-15s : %s \n","Is_getting_Vip",$11
+  printf "\t- %-15s : %s \n","Is_running_job",$12
+  printf "\n"
+  }'  ${tmp_dir}/$$.tmp  && rm -f ${tmp_dir}/$$.tmp
+
+}
+
+function f_chkclusters(){
+echo -en "\t PostgreSQL Clusters :\n"
+f_lscluster | while read current_cluster
+do
+     cluster_name=${current_cluster}
+     f_gather_config
+     # #psql_connexion_cmd="${binary_path}/psql ${dsn_info}"
+
+     if f_test_connection ; then
+       if [ -f "${tmp_dir}/${current_cluster}.lock" ]; then
+          PID=$(cat "${tmp_dir}/${current_cluster}.lock" 2> /dev/null )
+          run_job="A job is running with PID : "
+       else
+          PID=""
+          run_job="No job running"
+       fi
+     	printf "\t\t- %-20s : started on port %s %s %s \n" "${current_cluster}" "${port}" "${run_job}" "${PID}"
+     else
+     	printf "\t\t- %-20s : stopped  \n" ${current_cluster}
+     fi
+done
+}
+
+function f_details(){
+
+f_gather_config || exit 2
+
+if ! f_test_connection ${cluster_name}; then
+ 	f_log failed ${cluster_name} "PostgreSQL Cluster : ${cluster_name} is not alive . Exit "
+ 	exit 2
+ fi
+
+synthese=$( ${psql_connexion_cmd} -t -A -c "select count(datname)||';'||ROUND(sum(pg_database_size(datname))/1024/1024,0)||'_Mb;' from pg_database " )
+outdbs=$(  ${psql_connexion_cmd} -t -A -c "select a.datname||';'||b.rolname||';'||pg_database_size(a.datname)/1024/1024||'_Mb;'||case when a.datallowconn  is false then 'CLOSED' else 'OPEN' END from pg_database a inner join pg_roles b on a.datdba = b.oid  where a.datname not in ('postgres','template0','template1')" )
+outParams=$(  ${psql_connexion_cmd} -t -A -F";" -c  "select name,current_setting(name) from pg_settings where name in ('logging_collector','log_line_prefix','log_filename','log_directory','wal_level','archive_mode','archive_command','max_wal_senders','server_version','max_replication_slots','shared_buffers','work_mem','maintenance_work_mem') order by 1 ;")
+port=$( ${psql_connexion_cmd} -t -A  -c  "show port"  2> /dev/null )
+echo ""
+echo " - Global informations -" > ${tmp_dir}/.${cluster_name}_check.tmp
+echo "Cluster_name;Port;Nb_of_Dbs;Cluster_Logical_Full_size"  >> ${tmp_dir}/.${cluster_name}_check.tmp
+echo "------------;----;---------;--------------------------" >> ${tmp_dir}/.${cluster_name}_check.tmp
+echo "${cluster_name};${port};${synthese}" >> ${tmp_dir}/.${cluster_name}_check.tmp
+echo " - Cluster informations -" >>${tmp_dir}/.${cluster_name}_check.tmp
+echo "DBname;Owner;Size_MB;Database_state" >>${tmp_dir}/.${cluster_name}_check.tmp
+echo "------;-----;-------;--------------" >> ${tmp_dir}/.${cluster_name}_check.tmp
+for outdb in $(echo ${outdbs})
+    do
+        echo ${outdb} >> ${tmp_dir}/.${cluster_name}_check.tmp
+    done
+echo "Parameter;Setting" >> ${tmp_dir}/.${cluster_name}_check.tmp
+echo "---------;-------" >>  ${tmp_dir}/.${cluster_name}_check.tmp
+echo "${outParams}" | while read outParam
+  do
+      echo ${outParam} >> ${tmp_dir}/.${cluster_name}_check.tmp
+  done
+# test -f ${tmp_dir}/.${cluster_name}_check.tmp && column -t -s ";" ${tmp_dir}/.${cluster_name}_check.tmp
+if [  -d "${backup_directory}/${cluster_name}" ]; then
+echo "---------;-------" >>  ${tmp_dir}/.${cluster_name}_check.tmp
+backupdirsize=$(du -sm ${backup_directory}/${cluster_name} | mawk '{print $1}' )
+backupfssize=$(df -B1 --output=size ${backup_directory}/${cluster_name}  | tail -1 )
+echo "logical_backup_retention;${logical_backup_retention} ${logical_backup_retention_method}" >> ${tmp_dir}/.${cluster_name}_check.tmp
+echo "backup_directory;${backup_directory}/${cluster_name}"                                    >> ${tmp_dir}/.${cluster_name}_check.tmp
+echo "backup_directory_size;${backupdirsize} Mb"                                               >> ${tmp_dir}/.${cluster_name}_check.tmp
+echo "backup_fs_size;$(((backupfssize/1024/1024))) Mb"                                         >> ${tmp_dir}/.${cluster_name}_check.tmp
+let "ratio=($backupdirsize*100)/($backupfssize/1024/1024)"
+echo "---------;-------"                                                                       >>  ${tmp_dir}/.${cluster_name}_check.tmp
+echo "used Ratio;$ratio %"                                                                     >> ${tmp_dir}/.${cluster_name}_check.tmp
+else
+echo " /!\ No backup_directory found for ${cluster_name} "                                     >> ${tmp_dir}/.${cluster_name}_check.tmp
+fi
+test -f ${tmp_dir}/.${cluster_name}_check.tmp && column -t -s ";" ${tmp_dir}/.${cluster_name}_check.tmp
+test -f ${tmp_dir}/.${cluster_name}_check.tmp && rm -f ${tmp_dir}/.${cluster_name}_check.tmp
+
+
+}
+
+function f_light_crma(){
+
+crma_date=$(date --date="1 days ago" +%d-%m-%Y)
+
+f_gather_config || exit 2
+#psql_connexion_cmd="${binary_path}/psql ${dsn_info}"
+
+if ! f_test_connection ${cluster_name}; then
+ echo "PostgreSQL Cluster : ${cluster_name} is not alive . Exit "
+ exit 2
+fi
+f_log info ${cluster_name} "Gathering informations ... "
+synthese_db=$(  ${psql_connexion_cmd} -R";"  -t -A  -d postgres -c "select case when count(datname)::integer is null then 0 else count(datname) end||';'||case when ROUND(sum(pg_database_size(datname))/1024/1024,0) is null  then 0 else ROUND(sum(pg_database_size(datname))/1024/1024,0) end   from pg_database where datname not in ('postgres','template0','template1')" )
+shared_buffers=$(  ${psql_connexion_cmd} -R";" -t -A  -d postgres -c "select (setting::integer*8)/1024 from pg_settings where name ='shared_buffers'" )
+work_mem=$(  ${psql_connexion_cmd} -R";"  -t -A  -d postgres -c "select setting::integer/1024 from pg_settings where name ='work_mem'" )
+max_connections=$(  ${psql_connexion_cmd} -R";"  -t -A  -d postgres -c "select setting from pg_settings where name ='max_connections'" )
+synthese_mem=$(  ${psql_connexion_cmd} -R";"  -t -A  -d postgres -c "select sum (case when name = 'shared_buffers' then (setting::integer*8)/1024 else (setting::integer/1024)*current_setting('max_connections')::integer end ) as memory  from pg_settings where name in ('shared_buffers','work_mem') group by rollup (name) ;")
+synthese_version=$(  ${psql_connexion_cmd} -R";"  -t -A  -d postgres -c "show server_version" |mawk '{print $1}')
+echo -e "
+set session my.location = '${data_directory}' ;
+DO \$\$
+DECLARE
+command text ;
+BEGIN
+command := 'du -sm  '||current_setting('my.location')||' | cut -f 1 ' ;
+CREATE TEMPORARY TABLE temp_data_dir_size (tsize bigint);
+ EXECUTE ('COPY temp_data_dir_size  FROM PROGRAM '''||command||''' ') ;
+END ;
+\$\$ ;
+select tsize::bigint  from  temp_data_dir_size ;" > ${tmp_dir}/report.$$.sql
+data_dir_size=$(  ${psql_connexion_cmd}  -q  -t -A  -d postgres -f ${tmp_dir}/report.$$.sql )
+
+echo -e "
+set session my.location = '${data_directory}' ;
+DO \$\$
+DECLARE
+command text ;
+BEGIN
+command := 'df -B1 --output=size '||current_setting('my.location')||' | tail -1 ' ;
+CREATE TEMPORARY TABLE temp_fs_dir_size (tsize bigint);
+EXECUTE ('COPY temp_fs_dir_size  FROM PROGRAM '''||command||''' ') ;
+END ;
+\$\$ ;
+select tsize::bigint/1024/1024  from  temp_fs_dir_size ;"  > ${tmp_dir}/report.$$.sql
+fs_data_dir_size=$(  ${psql_connexion_cmd}  -q  -t -A  -d postgres -f ${tmp_dir}/report.$$.sql )
+
+echo -e "
+DO \$\$
+DECLARE
+command text ;
+BEGIN
+command := 'cat /proc/meminfo | grep MemTotal |cut -d: -f 2 |sed -e \"s/ //g\" -e \"s/kB//g\"' ;
+CREATE TEMPORARY TABLE temp_mem_size (tsize bigint);
+EXECUTE ('COPY temp_mem_size  FROM PROGRAM '''||command||''' ') ;
+END ;
+\$\$ ;
+select tsize::bigint/1024  from  temp_mem_size ;" > ${tmp_dir}/report.$$.sql
+mem_size=$( ${psql_connexion_cmd}  -q  -t -A  -d postgres -f ${tmp_dir}/report.$$.sql )
+
+echo -e "
+DO \$\$
+DECLARE
+command text ;
+BEGIN
+command := 'hostname -s' ;
+CREATE TEMPORARY TABLE temp_host (host varchar(25));
+EXECUTE ('COPY temp_host  FROM PROGRAM '''||command||''' ') ;
+END ;
+\$\$ ;
+select host  from  temp_host ;
+" > ${tmp_dir}/report.$$.sql
+host_name=$( ${psql_connexion_cmd}  -q  -t -A  -d postgres -f ${tmp_dir}/report.$$.sql )
+
+collect_datas="$(date +%d/%m/%Y);${cluster_name};${port};${synthese_version};${synthese_db};${host_name};${shared_buffers};${work_mem};${max_connections};${synthese_mem};${mem_size};${data_dir_size};${fs_data_dir_size}"
+
+#echo "${collect_datas}" > ${data_location}/${cluster_name}_${crma_date}.crma
+echo ${collect_datas} >> ${data_location}/globals_${crma_date}.crma
+if [ $? -eq 0 ]; then
+    f_log success ${cluster_name} "Gathered informations stored in ${data_location}/globals_${crma_date}.crma"
+
+else
+    f_log failed ${cluster_name} "Failed to gathered informations for ${cluster_name} "
+fi
+
+rm ${tmp_dir}/report.$$.sql
+}
+
+#  End Section : Check
+# --------------------
+
+# --------------------
+# Section : Logcleaner
+
+function f_log_cleaner(){
+
+
+  # local dsn_info="sudo PGSERVICEFILE=${service_file} PGSERVICE=${cluster_name} -i -u postgres"
+f_gather_config || exit 2
+if [[ ! ${host} =~ 127.0.0.1 ]] && [[ ! ${host} =~ localhost ]] && [[ ! ${host} =~ run ]]; then
+f_log warning ${cluster_name} "Can't perform log_cleaner on remote host "
+exit 2
+fi
+#psql_connexion_cmd="${binary_path}/psql ${dsn_info}"
+
+if ! f_test_connection ; then
+	echo "PostgreSQL Cluster : ${cluster_name} is not reachable . Exit "
+	exit 2
+fi
+
+f_log info ${cluster_name}  "Compressing logs beyond  : ${max_compress_days} days "
+f_log info ${cluster_name}  "Supppressing logs beyond : ${max_suppression_days} days "
+f_log info ${cluster_name}  "Dryrun activate          : ${dryrun} "
+
+local datadir=$(  ${psql_connexion_cmd} -t -A  -c "set application_name=pgtool ; show data_directory"  2> /dev/null )
+local logdir=$(  ${psql_connexion_cmd} -t -A -c "set application_name=pgtool ; show log_directory" 2> /dev/null)
+
+  if [ "${logdir}" = "pg_log" ] || [ "${logdir}" = "log" ]; then
+   local path_to_clean=${datadir}/${logdir}
+  else
+   local path_to_clean=${logdir}
+  fi
+  # local current_cluster=${2}
+  let CDATE=(${max_compress_days}*24*60)
+  find ${path_to_clean} -type f \( -name "*.log" -o -name "*.csv" \)  -mmin +${CDATE} | while read logfile
+  do
+  if [ "${dryrun}" == "yes" ]; then
+  echo "DryRun # COMPRESS : bzip2 ${logfile}"
+  else
+  f_log info ${cluster_name} "COMPRESS : bzip2 -s ${logfile}"
+  bzip2 -s ${logfile} > /dev/null  2>&1
+
+  fi
+  done
+
+  let SDATE=(${max_suppression_days}*24*60)
+  find ${path_to_clean} -type f -name "*.bz2"  -mmin +${SDATE} | while read logfile
+  do
+  if [ "${dryrun}" == "yes" ]; then
+  echo "DryRun # rm ${logfile}"
+  else
+  f_log info ${cluster_name} "SUPPRESS : rm ${logfile}"
+  rm ${logfile}
+  fi
+  done
+
+  if [ "${dryrun}" == "no" ]; then
+  echo -en  "
+  Last cleanup                    : $(date "+%F_%T")
+  Compression logs was set beyond : ${max_compress_days} days
+  Suppressing logs was set beyond : ${max_suppression_days} days
+  " >  ${path_to_clean}/logcleaner.trc
+  fi
+
+
+}
+
+# End Section : Logcleaner
+# --------------------
+
+# --------------------------
+#  Section : Maintenance
+
+function f_kill_maintenance(){
+
+local max_time=${1}
+local to_perform=$2
+# local current_cluster=$3
+if [ $(date +%s) -ge ${max_time} ]; then
+f_log warning ${cluster_name} "End of task ${task} - TimeOut reached : $(date +"%Y-%m-%d %H:%M:%S %Z" -d@${max_time})"
+global_end_time=$(date "+%s")
+table_ok=$(grep -c "success" ${tmp_dir}/${cluster_name}_${to_perform}.status  )
+[ -z "${table_ok}" ] && table_ok=0
+table_ko=$(grep -c "failed" ${tmp_dir}/${cluster_name}_${to_perform}.status  )
+[ -z "${table_ko}" ] && table_ko=0
+let "nb_tables=(${table_ok}+${table_ko})"
+duration=$((${global_end_time}-${global_starte_time}))
+echo "${jobdate};$(date +"%Y-%m-%d %H:%M:%S %Z" -d@${global_starte_time});$(date +"%Y-%m-%d %H:%M:%S %Z" -d@${global_end_time});${maintenance_partial}${to_perform}${vacuum_type};${db};{${table_ok},${table_ko},${nb_tables}};;canceled;${duration}"  >> ${data_file}
+exit 2
+else
+return 0
+fi
+
+
+}
+
+function f_maintenance_db(){
+
+local to_perform=$1
+
+if ! f_test_connection ; then
+f_log failed ${cluster_name} "PostgreSQL Cluster is not reachable . Exit  "
+exit 2
+fi
+
+data_file=${cluster_data_location}/maintenance.csv
+jobdate=$(date "+%Y%m%d%H%M%S")
+
+[ ! -z "${method_type}" ] && method="${method_type}"
+[ ! -z "${value}" ] && maintenance_period=${value}
+[ ! -z "${value}" ] && maintenance_ratio=${value}
+[ ! -z "${dbs}" ] && databases=${dbs}
+[ ! -z "${windows}" ] && time_windows=${windows}
+test -f ${tmp_dir}/${cluster_name}_${to_perform}.status && rm -f ${tmp_dir}/${cluster_name}_${to_perform}.status
+
+
+case ${from_file} in
+no)
+
+    case ${tables_treatment} in
+    include)
+    maintenance_partial="partial-"
+    if [ ! -z "${tables}" ]; then
+        for i in $(echo "${tables}" | tr ',' ' ')
+        do
+        if [ "$tables_list" == "" ]; then
+        tables_list=$(printf "quote_ident('%s')" "$i" )
+        else
+        tables_list="$tables_list$(printf ",quote_ident('%s')" "$i" )"
+        fi
+        done
+            tbllist_predicat=" and ( relname in (${tables_list})"
+    else
+        tbllist_predicat=" and ( true "
+    fi
+
+    ;;
+    exclude)
+    maintenance_partial="partial-"
+    if [ ! -z "${tables}" ]; then
+        for i in $(echo "${tables}" | tr ',' ' ')
+        do
+        if [ "$tables_list" == "" ]; then
+        tables_list=$(printf "quote_ident('%s')" "$i" )
+        else
+        tables_list="$tables_list$(printf ",quote_ident('%s')" "$i" )"
+        fi
+        done
+            tbllist_predicat=" and ( relname not in (${tables_list})"
+    else
+        tbllist_predicat=" and ( true "
+    fi
+
+    ;;
+    "")
+    tbllist_predicat=" and ( true "
+    ;;
+    *)
+    if [ ! -z "${tables}" ]; then
+    for i in $(echo "${tables}" | tr ',' ' ')
+    do
+    if [ "$tables_list" == "" ]; then
+    tables_list=$(printf "quote_ident('%s')" "$i" )
+    else
+    tables_list="$tables_list$(printf ",quote_ident('%s')" "$i" )"
+    fi
+    done
+    tbllist_predicat=" and ( relname in (${tables_list}) "
+    else
+    tbllist_predicat=" and ( true "
+    fi
+    ;;
+    esac
+
+    case ${schemas_treatment} in
+
+    include)
+    maintenance_partial="partial-"
+    if [ ! -z "${schemas}" ]; then
+    for i in $(echo "${schemas}" | tr ',' ' ')
+    do
+    if [ "$schemas_list" == "" ]; then
+    schemas_list=$(printf "quote_ident('%s')" "$i" )
+    else
+    schemas_list="$schemas_list$(printf ",quote_ident('%s')" "$i" )"
+    fi
+    done
+        schlist_predicat=" and schemaname in (${schemas_list}) )"
+    else
+    schlist_predicat=" and true ) "
+
+    fi
+
+    ;;
+    exclude)
+    maintenance_partial="partial-"
+    if [ ! -z "${schemas}" ]; then
+    for i in $(echo "${schemas}" | tr ',' ' ')
+    do
+    if [ "$schemas_list" == "" ]; then
+    schemas_list=$(printf "quote_ident('%s')" "$i" )
+    else
+    schemas_list="$schemas_list$(printf ",quote_ident('%s')" "$i" )"
+    fi
+    done
+        schlist_predicat=" and schemaname not in (${schemas_list}) ) "
+  else
+      schlist_predicat=" and true ) "
+    fi
+
+    ;;
+    "")
+    schlist_predicat=" and true ) "
+    ;;
+    *)
+    maintenance_partial="partial-"
+    if [ ! -z "${schemas}" ]; then
+    for i in $(echo "${schemas}" | tr ',' ' ')
+    do
+    if [ "$schemas_list" == "" ]; then
+    schemas_list=$(printf "quote_ident('%s')" "$i" )
+    else
+    schemas_list="$schemas_list$(printf ",quote_ident('%s')" "$i" )"
+    fi
+    done
+
+    schlist_predicat=" and schemaname in (${schemas_list}) ) "
+     else
+      schlist_predicat=" and true ) "
+    fi
+    ;;
+    esac
+;;
+yes)
+  if [ -f "${file_name}" ]; then
+   method="from_file"
+   for sch_tbl in $(cat "${file_name}" | grep -v "^#\|^$" )
+   do
+   if [ "${schemas_tables_list}" == "" ]; then
+   schemas_tables_list=$(printf "'%s'" "$sch_tbl" )
+   else
+   schemas_tables_list="$schemas_tables_list$(printf ",'%s'" "$sch_tbl" )"
+   fi
+   done
+   case ${schemas_tables_treatment} in
+   include)
+   maintenance_partial="partial-"
+   schtbllist_predicat=" where combined  in (${schemas_tables_list})"
+   ;;
+   exclude)
+   maintenance_partial="partial-"
+   schtbllist_predicat="  where combined  not in (${schemas_tables_list})"
+   ;;
+   *)
+   maintenance_partial="partial-"
+   schtbllist_predicat=" where combined  in (${schemas_tables_list}) "
+   ;;
+   esac
+  else
+    f_log failed ${cluster_name} "Mentioned file is not available : ${file_name} "
+    exit 2
+  fi
+;;
+esac
+
+
+case ${to_perform} in
+vacuum)
+if [ "${method}" == "ratio" ]; then
+stmt_tblist="set application_name=pgtool ; select schemaname||'.'||relname from pg_stat_all_tables where schemaname not in ('information_schema','pg_catalog','pg_toast','pglogical') and (n_live_tup+n_dead_tup) <> 0  and ((100*n_dead_tup)/(n_live_tup+n_dead_tup) > ${maintenance_ratio}) ${tbllist_predicat} ${schlist_predicat} order by  schemaname ;"
+f_log info ${cluster_name}  "Initialized ${to_perform} - at least ${maintenance_ratio} % modified ..."
+elif [ "${method}" == "days" ]; then
+stmt_tblist="set application_name=pgtool ; select schemaname||'.'||relname from pg_stat_all_tables where schemaname not in ('information_schema','pg_catalog','pg_toast','pglogical') and ( last_vacuum < (now()::date - '${maintenance_period} day'::interval) or last_vacuum is null) ${tbllist_predicat} ${schlist_predicat} order by  schemaname ;"
+f_log info ${cluster_name}  "Initialized ${to_perform} - ${maintenance_period} days ..."
+elif [ "${method}" == "from_file" ]; then
+stmt_tblist="set application_name=pgtool ; with lst as (select  schemaname||'.'||relname as combined from pg_stat_all_tables where schemaname not in ('information_schema','pg_catalog','pg_toast','pglogical') ) select combined from lst ${schtbllist_predicat} ;"
+f_log info ${cluster_name}  "Initialized ${to_perform} - from file predicat "
+elif [ "${method}" == "classic" ]; then
+stmt_tblist="set application_name=pgtool ; select schemaname||'.'||relname from pg_stat_all_tables where schemaname not in ('information_schema','pg_catalog','pg_toast') ${tbllist_predicat} ${schlist_predicat} order by  schemaname ;"
+f_log info ${cluster_name}  "Initialized ${to_perform} - classic method "
+else
+f_log info ${cluster_name}  " ${method} is unknown . Available method : ratio | days | classic  "
+exit 2
+fi
+maintenance_cmd="vacuum ${is_full_param} "
+;;
+
+reindex)
+if [ "${method}" == "ratio" ]; then
+stmt_tblist="set application_name=pgtool ; select schemaname||'.'||relname from pg_stat_all_tables where schemaname not in ('information_schema','pg_catalog','pg_toast') and (n_live_tup+n_dead_tup) <> 0  and ((100*n_dead_tup)/(n_live_tup+n_dead_tup) > ${maintenance_ratio}) ${tbllist_predicat} ${schlist_predicat} order by  schemaname ;"
+f_log info ${cluster_name}  "Initialized ${to_perform} - at least ${maintenance_ratio} % modified ..."
+elif [ "${method}" == "from_file" ]; then
+  stmt_tblist="set application_name=pgtool ; with lst as (select  schemaname||'.'||relname as combined from pg_stat_all_tables where schemaname not in ('information_schema','pg_catalog','pg_toast') ) select combined from lst ${schtbllist_predicat} ;"
+  f_log info ${cluster_name}  "Initialized ${to_perform} - from file predicat "
+elif [ "${method}" == "days" ]; then
+stmt_tblist="set application_name=pgtool ; select schemaname||'.'||relname from pg_stat_all_tables where schemaname not in ('information_schema','pg_catalog','pg_toast') and ( last_vacuum < (now()::date - '${maintenance_period} day'::interval) or last_vacuum is null) ${tbllist_predicat} ${schlist_predicat} order by  schemaname ;"
+f_log info ${cluster_name}  "Initialized ${to_perform} - ${maintenance_period} days ..."
+elif [ "${method}" == "classic" ]; then
+stmt_tblist="set application_name=pgtool ; select schemaname||'.'||relname from pg_stat_all_tables where schemaname not in ('information_schema','pg_catalog','pg_toast') ${tbllist_predicat} ${schlist_predicat} order by  schemaname ;"
+f_log info ${cluster_name}  "Initialized ${to_perform} - classic method "
+else
+f_log info ${cluster_name}  " ${method} is unknown . Available method : ratio | days | classic  "
+exit 2
+fi
+maintenance_cmd="reindex table "
+vacuum_type=""
+;;
+
+analyze)
+if [ "${method}" == "ratio" ]; then
+stmt_tblist="set application_name=pgtool ; select schemaname||'.'||relname from pg_stat_all_tables where schemaname not in ('information_schema','pg_catalog','pg_toast') and (n_live_tup+n_dead_tup) <> 0  and ((100*n_dead_tup)/(n_live_tup+n_dead_tup) > ${maintenance_ratio}) ${tbllist_predicat} ${schlist_predicat} order by  schemaname ;"
+f_log info ${cluster_name}  "Initialized ${to_perform} - at least  ${maintenance_ratio} % modified ..."
+elif [ "${method}" == "days" ]; then
+stmt_tblist="set application_name=pgtool ; select schemaname||'.'||relname from pg_stat_all_tables where schemaname not in ('information_schema','pg_catalog','pg_toast') and ( last_analyze < (now()::date - '${maintenance_period} day'::interval) or last_analyze is null) ${tbllist_predicat} ${schlist_predicat} order by  schemaname ;"
+f_log info ${cluster_name}  "Initialized ${to_perform} - ${maintenance_period} days ..."
+elif [ "${method}" == "from_file" ]; then
+stmt_tblist="set application_name=pgtool ; with lst as (select  schemaname||'.'||relname as combined from pg_stat_all_tables where schemaname not in ('information_schema','pg_catalog','pg_toast') ) select combined from lst ${schtbllist_predicat} ;"
+f_log info ${cluster_name}  "Initialized ${to_perform} - from file predicat "
+elif [ "${method}" == "classic" ]; then
+stmt_tblist="set application_name=pgtool ; select schemaname||'.'||relname from pg_stat_all_tables where schemaname not in ('information_schema','pg_catalog','pg_toast') ${tbllist_predicat} ${schlist_predicat} order by  schemaname ;"
+f_log info ${cluster_name}  "Initialized ${to_perform} - classic method"
+else
+f_log info ${cluster_name}  " ${method} is unknown . Available method : ratio | days | classic  "
+exit 2
+fi
+maintenance_cmd="analyze verbose "
+vacuum_type=""
+;;
+esac
+
+  case ${databases} in
+  "all")
+
+          [ ! -z "${tbllist}" ] && f_log warning "${cluster_name}" "Maintenance on specific table cannot be performed with databases = all "
+          limite_date=$(date -d"+${time_windows} min" +%s )
+          #echo "Export de toutes les bases de données " >>  ${BPLABEL}
+          f_log info ${cluster_name} "Initiate Maintenance with timeout at $(date -d"@${limite_date}" +%F_%T)  "
+          dblist=$(  ${psql_connexion_cmd} -t -A -c "set application_name=pgtool ; select datname from pg_database where datname not in ('postgres','template0','template1','pgtool')")
+
+          for db in ${dblist}
+          do
+              global_starte_time=$(date "+%s")
+              f_return=0
+              database=${db}
+              # INTEGRER UN DRYRUN
+          		f_log info ${cluster_name}  "Initiating ${to_perform} ${vacuum_type} on ${db} ..."
+        		  tbllist=$( ${psql_connexion_cmd} -t -A -d "${db}" -c "${stmt_tblist}" )
+              table_ok=0
+              table_ko=0
+              channel=1
+              tbl_array=($(echo ${tbllist}) )
+              max=${#tbl_array[@]}
+              curseur=0
+              let "tierce=(max/5)"
+              echo "${db}" > ${tmp_dir}/${cluster_name}_${to_perform}.status
+               while [[ ${curseur} -le ${max} ]];
+               do
+                 ((a++))
+                    current_tabs=($(echo ${tbl_array[@]:${curseur}:${nb_jobs}}))
+                    if f_kill_maintenance ${limite_date} ${to_perform}; then
+                    for tbl in ${current_tabs[@]}
+                    do
+                      if [ "${isverbose}" == "true" ]; then
+                              f_log debug ${cluster_name} "Running : Job : ${i} -> ${psql_connexion_cmd} -d ${db} -c ${maintenance_cmd} ${tbl} ... "
+                      fi
+                      start_date=$(date "+%s")
+                         ( ${psql_connexion_cmd} -d "${db}"  -c "${maintenance_cmd} ${tbl}" >> ${log_location}/${to_perform}_${db}_${jobdate}.log 2>&1
+                                if [ $? -eq 0 ]; then
+                                   state="success"
+                                else
+                                   state="failed"
+                                fi
+                                end_date=$(date "+%s")
+                                duration=$((${end_date}-${start_date}))
+                                echo "${jobdate};$(date +"%Y-%m-%d %H:%M:%S %Z" -d@${start_date});$(date +"%Y-%m-%d %H:%M:%S %Z" -d@${end_date});${maintenance_partial}${to_perform}${vacuum_type};${db};;${tbl};${state};${duration}"  >> ${data_file}
+                                echo ${state} >> ${tmp_dir}/${cluster_name}_${to_perform}.status
+                      ) & pids+=( $! )
+
+                   done
+               if [ "${isverbose}" == "true" ]; then
+                       f_log debug ${cluster_name} "Running : Waiting for PID : ${pids[@]} ... "
+               fi
+             wait ${pids[@]}
+             unset pids
+               fi
+
+             if [ ${max} -ne 0 ]; then
+               let "progress=((curseur*100)/max)"
+               [ ${progress} -ge 100 ] && progress=100
+               if [ ${a} -ge ${tierce} ] || [ ${progress} -ge 100 ]; then
+                 a=0
+                 f_log info "${cluster_name}" "Progress : ${progress} % on ${db} "
+               fi
+             fi
+             let "curseur=(curseur+nb_jobs)"
+
+             done
+             f_log info ${cluster_name}  "${to_perform} stats for : ${db} "
+             if [ -f ${tmp_dir}/${cluster_name}_${to_perform}.status ]; then
+             table_ok=$(grep -c "success" ${tmp_dir}/${cluster_name}_${to_perform}.status  )
+             [ -z "${table_ok}" ] && table_ok=0
+             table_ko=$(grep -c "failed" ${tmp_dir}/${cluster_name}_${to_perform}.status  )
+             [ -z "${table_ko}" ] && table_ko=0
+             rm  ${tmp_dir}/${cluster_name}_${to_perform}.status
+             fi
+             f_log info ${cluster_name}  " - ${table_ok} tables OK - ${table_ko} tables KO "
+              [ ${table_ko} -gt 0 ] && f_log info ${cluster_name}  " HINT : Check ${log_location}/${to_perform}_${db}_${jobdate}.log "
+              global_end_time=$(date "+%s")
+              let "nb_tables=(${table_ok}+${table_ko})"
+              duration=$((${global_end_time}-${global_starte_time}))
+              echo "${jobdate};$(date +"%Y-%m-%d %H:%M:%S %Z" -d@${global_starte_time});$(date +"%Y-%m-%d %H:%M:%S %Z" -d@${global_end_time});${maintenance_partial}${to_perform}${vacuum_type};${db};{${table_ok},${table_ko},${nb_tables}};;completed;${duration}"  >> ${data_file}
+            done
+
+  ;;
+  "")
+  f_log failed  ${cluster_name} "No database selected "
+  exit 2
+  ;;
+
+  *)
+         limite_date=$(date -d"+${time_windows} min" +%s )
+         f_log info ${cluster_name} "Initiate ${to_perform} with timeout at $(date -d"@${limite_date}" +%F_%T) "
+         ################
+         # lecture des bases listes
+         ################
+                      for db in $(echo "${databases}" | tr ',' '\n')
+                      do
+                            global_starte_time=$(date "+%s")
+                             f_return=0
+                             f_log info ${cluster_name} "Initiating ${to_perform} ${vacuum_type} on ${db} ..."
+                            tbllist=$(  ${psql_connexion_cmd} -d "${db}" -t -A  -c  "${stmt_tblist}" )
+                             table_ok=0
+                             table_ko=0
+                             channel=1
+                             tbl_array=($(echo ${tbllist}) )
+                             max=${#tbl_array[@]}
+                             curseur=0
+                             let "tierce=(max/5)"
+                              while [[ ${curseur} -le ${max} ]];
+                              do
+                               ((a++))
+                               current_tabs=($(echo ${tbl_array[@]:${curseur}:${nb_jobs}}))
+                               if f_kill_maintenance ${limite_date} ${to_perform}; then
+
+                               for tbl in ${current_tabs[@]}
+                               do
+                                 if [ "${isverbose}" == "true" ]; then
+                                         f_log debug ${cluster_name} "Running : Job : ${i} -> ${psql_connexion_cmd} -d ${db} -c ${maintenance_cmd} ${tbl} ... "
+                                 fi
+                                 start_date=$(date "+%s")
+                                    ( ${psql_connexion_cmd} -d "${db}"  -c "${maintenance_cmd} ${tbl}" >> ${log_location}/${to_perform}_${db}_${jobdate}.log 2>&1
+                                           if [ $? -eq 0 ]; then
+                                              state="success"
+                                           else
+                                                state="failed"
+                                           fi
+                                           end_date=$(date "+%s")
+                                           duration=$((${end_date}-${start_date}))
+                                           echo "${jobdate};$(date +"%Y-%m-%d %H:%M:%S %Z" -d@${start_date});$(date +"%Y-%m-%d %H:%M:%S %Z" -d@${end_date});${maintenance_partial}${to_perform}${vacuum_type};${db};;${tbl};${state};${duration}"  >> ${data_file}
+                                           echo ${state} >> ${tmp_dir}/${cluster_name}_${to_perform}.status
+                                 ) & pids+=( $! )
+                                ((i++))
+                              done
+                              if [ "${isverbose}" == "true" ]; then
+                                      f_log debug ${cluster_name} "Running : Waiting for PID : ${pids[@]} ... "
+                              fi
+                              wait ${pids[@]}
+                              unset pids
+                              fi
+
+                            if [ ${max} -ne 0 ]; then
+                              let "progress=((curseur*100)/max)"
+                              [ ${progress} -ge 100 ] && progress=100
+                              if [ ${a} -ge ${tierce} ] || [ ${progress} -ge 100 ]; then
+                                a=0
+                                f_log info "${cluster_name}" "Progress : ${progress} % on ${db} "
+                              fi
+                            fi
+                            let "curseur=(curseur+nb_jobs)"
+                            done
+                            f_log info ${cluster_name}  "${to_perform} Stats for: ${db} "
+                         if [ -f ${tmp_dir}/${cluster_name}_${to_perform}.status ]; then
+                            table_ok=$(grep -c "success" ${tmp_dir}/${cluster_name}_${to_perform}.status  )
+                            [ -z "${table_ok}" ] && table_ok=0
+                            table_ko=$(grep -c "failed" ${tmp_dir}/${cluster_name}_${to_perform}.status  )
+                            [ -z "${table_ko}" ] && table_ko=0
+                            rm  ${tmp_dir}/${cluster_name}_${to_perform}.status
+                          fi
+                            f_log info ${cluster_name}  "${table_ok} tables OK - ${table_ko} tables KO "
+                            [ ${table_ko} -gt 0 ] && f_log info ${cluster_name}  " HINT : Check ${log_location}/${to_perform}_${db}_${jobdate}.log "
+                            global_end_time=$(date "+%s")
+                            let "nb_tables=(${table_ok}+${table_ko})"
+                            duration=$((${global_end_time}-${global_starte_time}))
+                            echo "${jobdate};$(date +"%Y-%m-%d %H:%M:%S %Z" -d@${global_starte_time});$(date +"%Y-%m-%d %H:%M:%S %Z" -d@${global_end_time});${maintenance_partial}${to_perform}${vacuum_type};${db};{${table_ok},${table_ko},${nb_tables}};;completed;${duration}"  >> ${data_file}
+                  done
+          ;;
+          esac
+
+
+
+}
+
+function f_log_expire(){
+
+  let CDATE=(${max_compress_days}*24*60)
+  if [ "${isverbose}" == "true" ]; then
+     f_log debug ${cluster_name} "Running : find  ${log_directory}/${cluster_name}  -type d -mmin +${CDATE}  ... "
+  fi
+  find ${log_directory}/${cluster_name} -type d -mmin +${CDATE} | while read tocompress
+  do
+    if [ "${dryrun}" == "yes" ]; then
+      echo "DryRun # COMPRESS :  tar -jcvf ${tocompress}.tar.bz2 ${tocompress}"
+    else
+      f_log info ${cluster_name} "COMPRESS : tar -jcvf ${tocompress}.tar.bz2 ${tocompress}"
+      tar -jcvf ${tocompress}.tar.bz2 ${tocompress} > /dev/null  2>&1
+      if [ $? -eq 0 ]; then
+       rm -fr ${tocompress}  2>/dev/null
+      fi
+    fi
+  done
+
+  let SDATE=(${max_suppression_days}*24*60)
+  if [ "${isverbose}" == "true" ]; then
+     f_log debug ${cluster_name} "Running : find  ${log_directory}/${cluster_name}/*.tar.bz2 -type f-mmin +${SDATE}  ... "
+  fi
+
+  find ${log_directory}/${cluster_name}/ -type f  -name "*.tar.bz2" -mmin +${SDATE}  | while read todelete
+     do
+        log_directory_to_delete=$(basename ${todelete})
+        if [ "${dryrun}" == "yes" ]; then
+        echo "DryRun # Dropping directory ${log_directory_to_delete}"
+        else
+        f_log info ${cluster_name} "Dropping directory ${log_directory_to_delete}"
+        rm -fr ${todelete} 2> /dev/null
+         if [ $? -eq 0 ]; then
+           f_log success ${cluster_name} "Directory ${log_directory_to_delete} dropped "
+         else
+           f_log failed ${cluster_name} "Directory ${log_directory_to_delete} not dropped "
+         fi
+        fi
+     done
+
+
+}
+
+# End Section : Maintenance
+# --------------------------
+
+# --------------------------
+#  Section : Logical Backup
+
+function f_logical_backup(){
+
+# local dsn_info="sudo PGSERVICEFILE=${service_file} PGSERVICE=${cluster_name} -i -u postgres"
+local jobdate=$(date "+%Y%m%d%H%M%S")
+local exit_code=0
+# Testing Connection :
+# --------------------
+# f_gather_config  || exit 2
+
+#psql_connexion_cmd="${binary_path}/psql ${dsn_info}"
+bkp_dsn=" --host=${host} --user=${username} --port=${port} "
+
+if ! f_test_connection ${cluster_name}; then
+  f_log failed ${cluster_name} "PostgreSQL Cluster is not reachable . Exit  "
+  exit 2
+fi
+
+
+
+# -------------------
+[ ! -z ${dbs} ] && databases=${dbs}
+
+case ${from_file} in
+no)
+case ${tables_treatment} in
+include)
+tbl_predicat=" -t "
+;;
+exclude)
+tbl_predicat=" -T "
+;;
+*)
+tbl_predicat=" -t "
+;;
+esac
+
+if [ ! -z "${tables}" ]; then
+dump_partial="partial-"
+for relation in $(echo "${tables}" | tr ',' ' ')
+do
+tables_list="$tables_list$(printf " %s %s " ${tbl_predicat} ${relation} )"
+done
+fi
+
+# Schemas
+case ${schemas_treatment} in
+include)
+schlist_predicat=" -n "
+;;
+exclude)
+schlist_predicat=" -N "
+;;
+*)
+schlist_predicat=" -n "
+;;
+esac
+
+
+if [ ! -z "${schemas}" ]; then
+dump_partial="partial-"
+for schema in $(echo "${schemas}" | tr ',' ' ')
+do
+schemas_list="$schemas_list$(printf " %s %s " ${schlist_predicat} ${schema} )"
+done
+fi
+;;
+yes)
+file_comment=" with file : ${file_name} "
+dump_partial="partial-"
+case ${tables_treatment} in
+include)
+tbl_predicat=" -t "
+;;
+exclude)
+tbl_predicat=" -T "
+;;
+*)
+tbl_predicat=" -t "
+;;
+esac
+  if [ -f "${file_name}" ]; then
+   for relation in $(cat "${file_name}" | grep -v "^#\|^$" )
+   do
+     tables_list="$tables_list$(printf " %s %s " ${tbl_predicat} ${relation} )"
+   done
+  else
+    f_log failed ${cluster_name} "Mentioned file is not available : ${file_name} "
+    exit 2
+  fi
+
+;;
+esac
+
+# Ensure All directories are available :
+# --------------------
+data_file=${cluster_data_location}/backup.csv
+
+if [ -f "${binary_path}/pg_dump" ]; then
+   backup_cmd="${binary_path}/pg_dump "
+else
+  f_log failed "${cluster_name}" "Failed to get binary pg_dump in the PostgreSQL version ${postgresql_cluster_version} "
+  exit 2
+fi
+
+# Initiate Backup :
+# --------------------
+case ${databases} in
+all)
+    # MARK1
+    f_log info ${cluster_name} "Initiate Logical Backup "
+    dblist=$(   ${psql_connexion_cmd} -t -A  -c "select datname from pg_database where datname not in ('postgres','template0','template1','pgtool')")
+    for db in ${dblist}
+        do
+
+            database=${db}
+            f_log info ${cluster_name} "Dumping ${dump_partial}${db} ${file_comment} ... "
+
+
+            if [ "${isverbose}" == "true" ]; then
+                f_log debug ${cluster_name} "Running : ${backup_cmd} ${bkp_dsn} -d ${db} ${tables_list} ${schemas_list} -Fc -v -f ${logical_backup_location}/${dump_partial}${db}_${jobdate}.dmp ... "
+            fi
+            start_date=$(date "+%s")
+             ${backup_cmd} ${bkp_dsn} -d "${db}" ${tables_list} ${schemas_list} -Fc -v -f ${logical_backup_location}/${dump_partial}${db}_${jobdate}.dmp >> ${log_location}/${dump_partial}${db}_${jobdate}.log 2>&1
+
+            if [ $? -eq 0 ]; then
+                end_date=$(date "+%s")
+                duration=$((${end_date}-${start_date}))
+                bkp_size=$(du -sb ${logical_backup_location}/${dump_partial}${db}_${jobdate}.dmp | mawk '{print $1}')
+
+                echo "${jobdate};$(date +"%Y-%m-%d %H:%M:%S %Z" -d@${start_date});$(date +"%Y-%m-%d %H:%M:%S %Z" -d@${end_date});pg_dump_data;${dump_partial}${db};${duration};${state};${bkp_size}"  >> ${data_file}
+                f_log success ${cluster_name} "Dump ${dump_partial}${db} done "
+
+            else
+                # ((exit_code++))
+                end_date=$(date "+%s")
+                duration=$((${end_date}-${start_date}))
+                bkp_size=$(du -sb ${logical_backup_location}/${dump_partial}${db}_${jobdate}.dmp | mawk '{print $1}')
+                f_log failed ${cluster_name} "Dump of ${dump_partial}${db} failed, HINT : check  ${log_location}/${dump_partial}${db}_${jobdate}.log  "
+                echo "${jobdate};$(date +"%Y-%m-%d %H:%M:%S %Z" -d@${start_date});$(date +"%Y-%m-%d %H:%M:%S %Z" -d@${end_date});pg_dump_data;${dump_partial}${db};${duration};failed;${bkp_size}"  >> ${data_file}
+                f_log info ${cluster_name} " HINT : Check ${log_location}/dump_${dump_partial}${db}_${jobdate}.log"
+            fi
+            f_log info ${cluster_name} "Dumping structure ${dump_partial}${db} ${file_comment} ... "
+            if [ "${isverbose}" == "true" ]; then
+                 f_log debug ${cluster_name} "Running : ${backup_cmd} ${bkp_dsn} -d ${db} ${tables_list} -s -f ${logical_backup_location}/structure_${dump_partial}${db}_${jobdate}.sql  ... "
+             fi
+            start_date=$(date "+%s")
+            ${backup_cmd} ${bkp_dsn} -d "${db}" ${tables_list} ${schemas_list} -s -f ${logical_backup_location}/structure_${dump_partial}${db}_${jobdate}.sql >> ${log_location}/${dump_partial}${db}_${jobdate}.log 2>&1
+            if [ $? -eq 0 ]; then
+                f_log success ${cluster_name} "Dump of globals done  "
+                end_date=$(date "+%s")
+                duration=$((${end_date}-${start_date}))
+                bkp_size=$(du -sb ${logical_backup_location}/structure_${dump_partial}${db}_${jobdate}.sql | mawk '{print $1}')
+                echo "${jobdate};$(date +"%Y-%m-%d %H:%M:%S %Z" -d@${start_date});$(date +"%Y-%m-%d %H:%M:%S %Z" -d@${end_date});pg_dump;${dump_partial}${db}_structure;${duration};success;${bkp_size}"  >> ${data_file}
+            else
+                # ((exit_code++))
+                end_date=$(date "+%s")
+                duration=$((${end_date}-${start_date}))
+                bkp_size=$(du -sb ${logical_backup_location}/structure_${dump_partial}${db}_${jobdate}.sql | mawk '{print $1}')
+                echo "${jobdate};$(date +"%Y-%m-%d %H:%M:%S %Z" -d@${start_date});$(date +"%Y-%m-%d %H:%M:%S %Z" -d@${end_date});pg_dump;${dump_partial}${db}_structure;${duration};failed;${bkp_size}"  >> ${data_file}
+                f_log failed ${cluster_name} "Dump of ${dump_partial}${db} structure failed , HINT : check ${log_location}/${dump_partial}${db}_${jobdate}.log "
+            fi
+        done
+
+;;
+"")
+    f_log failed  ${cluster_name} "No database selected"
+    exit 2
+;;
+
+*)
+
+    f_log info ${cluster_name} "Initiating Logical Backup  "
+
+    for db in $(echo "${databases}" | tr ',' '\n')
+        do
+        f_log info ${cluster_name} "Dumping ${dump_partial}${db} ${file_comment} ... "
+
+        if [ "${isverbose}" == "true" ]; then
+            f_log debug ${cluster_name} "Running : ${backup_cmd} ${bkp_dsn} -d ${db} ${tables_list} ${schemas_list} -Fc -v -f ${logical_backup_location}/${dump_partial}${db}_${jobdate}.dmp ... "
+        fi
+        start_date=$(date "+%s")
+          ${backup_cmd} ${bkp_dsn}  -d "${db}" ${tables_list} ${schemas_list} -Fc -v -f ${logical_backup_location}/${dump_partial}${db}_${jobdate}.dmp >> ${log_location}/${dump_partial}${db}_${jobdate}.log 2>&1
+        if [ $? -eq 0 ]; then
+            end_date=$(date "+%s")
+            duration=$((${end_date}-${start_date}))
+            bkp_size=$(du -sb ${logical_backup_location}/${dump_partial}${db}_${jobdate}.dmp | mawk '{print $1}')
+            echo "${jobdate};$(date +"%Y-%m-%d %H:%M:%S %Z" -d@${start_date});$(date +"%Y-%m-%d %H:%M:%S %Z" -d@${end_date});pg_dump;${dump_partial}${db};${duration};success;${bkp_size}"  >> ${data_file}
+
+            f_log success ${cluster_name} "Dump of ${dump_partial}${db} done "
+        else
+            # ((exit_code++))
+            end_date=$(date "+%s")
+            duration=$((${end_date}-${start_date}))
+            bkp_size=$(du -sb ${logical_backup_location}/${dump_partial}${db}_${jobdate}.dmp | mawk '{print $1}')
+            echo "${jobdate};$(date +"%Y-%m-%d %H:%M:%S %Z" -d@${start_date});$(date +"%Y-%m-%d %H:%M:%S %Z" -d@${end_date});pg_dump;${dump_partial}${db};${duration};failed;${bkp_size}"  >> ${data_file}
+            f_log failed ${cluster_name} "Dump of ${dump_partial}${db} failed, HINT : check ${log_location}/${dump_partial}${db}_${jobdate}.log  "
+            f_log info ${cluster_name} " HINT :  Check ${log_location}/${dump_partial}${db}_${jobdate}.log "
+        fi
+        f_log info ${cluster_name} "Dumping structure ${dump_partial}${db} ${file_comment} ... "
+        if [ "${isverbose}" == "true" ]; then
+             f_log debug ${cluster_name} "Running :  ${backup_cmd} ${bkp_dsn} -d ${db}  ${tables_list} ${schemas_list} -s -f ${logical_backup_location}/structure_${dump_partial}${db}_${jobdate}.sql  ... "
+         fi
+        start_date=$(date "+%s")
+         ${backup_cmd} ${bkp_dsn} -d ${db} ${tables_list} ${schemas_list} -s -f ${logical_backup_location}/structure_${dump_partial}${db}_${jobdate}.sql >> ${log_location}/${dump_partial}${db}_${jobdate}.log 2>&1
+        if [ $? -eq 0 ]; then
+            f_log success ${cluster_name} "Dump of globals done  "
+            end_date=$(date "+%s")
+            duration=$((${end_date}-${start_date}))
+            bkp_size=$(du -sb ${logical_backup_location}/structure_${dump_partial}${db}_${jobdate}.sql | mawk '{print $1}')
+            echo "${jobdate};$(date +"%Y-%m-%d %H:%M:%S %Z" -d@${start_date});$(date +"%Y-%m-%d %H:%M:%S %Z" -d@${end_date});pg_dump;${dump_partial}${db}_structure;${duration};success;${bkp_size}"  >> ${data_file}
+        else
+            # ((exit_code++))
+            end_date=$(date "+%s")
+            duration=$((${end_date}-${start_date}))
+            bkp_size=$(du -sb ${logical_backup_location}/structure_${dump_partial}${db}_${jobdate}.sql | mawk '{print $1}')
+            echo "${jobdate};$(date +"%Y-%m-%d %H:%M:%S %Z" -d@${start_date});$(date +"%Y-%m-%d %H:%M:%S %Z" -d@${end_date});pg_dump;${dump_partial}${db}_structure;${duration};failed;${bkp_size}"  >> ${data_file}
+            f_log failed ${cluster_name} "Dump of ${dump_partial}${db} structure failed , HINT : check ${log_location}/${dump_partial}${db}_${jobdate}.log "
+        fi
+        done
+
+;;
+esac
+
+
+# Backup configuration if asked :
+# --------------------
+   if [ "${with_global}" == "true" ]; then
+      f_global_backup ${cluster_name}
+   fi
+
+
+# Clean backup :
+# ---------------
+
+
+   if [ ${exit_code} -eq 0 ]; then
+      f_logical_expire
+      return 0
+   else
+      f_log warning ${cluster_name} "Some errors in backup , no cleanup "
+      return 2
+   fi
+
+}
+
+function f_logical_expire(){
+
+  if [ ! -z "${bkpset_input}" ]; then
+     logical_backup_retention="${bkpset_input}"
+     logical_backup_retention_method="custom"
+  fi
+
+f_log info "${cluster_name}" "Cleaning backup with method : ${logical_backup_retention_method} - value : ${logical_backup_retention}"
+case ${logical_backup_retention_method} in
+  count)
+   ((logical_backup_retention++))
+   ls -1td ${backup_directory}/${cluster_name}/logical/*  2>/dev/null| tail -n +${logical_backup_retention}  | while read todelete
+   do
+     backupset=$(basename ${todelete})
+     f_log info ${cluster_name} "Dropping directory ${backupset}"
+     rm -frv ${todelete} >> ${log_location}/${backupset}_expire.log
+      if [ $? -eq 0 ]; then
+        f_log success ${cluster_name} "Backup directory ${todelete} dropped "
+      else
+        f_log failed ${cluster_name} "Backup directory ${todelete} not dropped "
+      fi
+     done
+  ;;
+  days)
+ let MDATE=(${logical_backup_retention}*24*60)
+ if [ "${isverbose}" == "true" ]; then
+    f_log debug ${cluster_name} "Running : find ${logical_backup_location} -type d -mmin +${MDATE}  ... "
+ fi
+ find ${backup_directory}/${cluster_name}/logical/* -type d  -mmin +${MDATE} | while read todelete
+    do
+       backupset=$(basename ${todelete})
+       f_log info ${cluster_name} "Dropping directory ${backupset}"
+       rm -fr ${todelete} 2> /dev/null
+        if [ $? -eq 0 ]; then
+          f_log success ${cluster_name} "Directory ${backupset} dropped "
+        else
+          f_log failed ${cluster_name} "Directory ${backupset} not dropped "
+        fi
+    done
+ ;;
+ custom)
+  find ${backup_directory}/${cluster_name}/logical/* -type d -name "*${bkpset_input}*"   | while read todelete
+  do
+   backupset=$(basename ${todelete})
+   f_log info ${cluster_name} "Dropping directory ${todelete}"
+    rm -fr ${todelete}  >> ${log_location}/${backupset}_expire.log 2>/dev/null
+    if [ $? -eq 0 ]; then
+      f_log success ${cluster_name} "Directory ${backupset} dropped "
+    else
+      f_log failed ${cluster_name} "Directory ${backupset} not dropped "
+    fi
+  done
+esac
+}
+
+function f_logical_info(){
+
+echo "LOGICAL_BACKUPSET;SIZE (MB);FILENAME" >> ${tmp_dir}/.$$.tmp
+echo "-----------------;---------;--------" >> ${tmp_dir}/.$$.tmp
+
+find  ${backup_directory}/${cluster_name}/logical/* -type d 2> /dev/null | while read dmpdir
+do
+ t=$(basename ${dmpdir})
+ s=$(du -sm ${dmpdir} | mawk '{print $1}')
+ echo "$t;$s" >> ${tmp_dir}/.$$.tmp
+find ${dmpdir} -type f | while read file
+do
+ to=$(basename -s .dmp.bz2 ${file})
+ so=$(du -sm  ${file}| mawk '{print $1}' )
+ echo "       => ;${so};${to}" >> ${tmp_dir}/.$$.tmp
+done
+done
+
+test -f "${tmp_dir}/.$$.tmp"  && column -t -s ";" ${tmp_dir}/.$$.tmp && rm -f ${tmp_dir}/.$$.tmp
+
+}
+
+# End Section : Logical Backup
+# --------------------------
+
+# --------------------------
+#  Section : Physical Backup
+
+function f_global_backup(){
+local  exit_code
+
+[ -z "${jobdate}" ] && local jobdate=$(date "+%Y%m%d%H%M%S")
+
+# f_gather_config  || exit 2
+
+#psql_connexion_cmd="${binary_path}/psql ${dsn_info}"
+bkp_dsn=" --host=${host} --user=${username} --port=${port} "
+
+data_file=${cluster_data_location}/backup.csv
+
+f_log info ${cluster_name} "Dumping globals ... "
+
+if [ -f "${binary_path}/pg_dumpall" ]; then
+   backup_cmd="${binary_path}/pg_dumpall"
+else
+  f_log failed "${cluster_name}" "Failed to get binary pg_dumpall in the PostgreSQL version ${postgresql_cluster_version} "
+  exit 2
+fi
+
+if [ "${isverbose}" == "true" ]; then
+     f_log debug ${cluster_name} "Running :  ${backup_cmd} ${bkp_dsn} -v -r -s -f ${backup_location}/globals_${jobdate}.sql ... "
+ fi
+ start_date=$(date "+%s")
+  ${backup_cmd} ${bkp_dsn} -v -r -s -f ${logical_backup_location}/globals_${jobdate}.sql >> ${log_location}/globals_${jobdate}.log  2>&1
+ if [ $? -eq 0 ]; then
+     f_log success ${cluster_name} "Dump of globals done  "
+     end_date=$(date "+%s")
+     duration=$((${end_date}-${start_date}))
+     bkp_size=$(du -sb ${logical_backup_location}/globals_${jobdate}.sql| mawk '{print $1}')
+     echo "${jobdate};$(date +"%Y-%m-%d %H:%M:%S %Z" -d@${start_date});$(date +"%Y-%m-%d %H:%M:%S %Z" -d@${end_date});pg_dumpall;globals_and_confs;${duration};${bkp_size}"  >> ${data_file}
+ else
+     ((exit_code++))
+     f_log failed ${cluster_name} "Dump of globals failed , HINT : check ${log_location}/globals_${jobdate}.log "
+ fi
+
+
+
+f_log info ${cluster_name} "Copying configurations files ... "
+
+
+outCONF=$( ${psql_connexion_cmd} -t -A -c "select setting from pg_settings where name ='config_file'")
+outHBA=$( ${psql_connexion_cmd} -t -A -c "select setting from pg_settings where name ='hba_file'")
+if [ "${isverbose}" == "true" ]; then
+   f_log debug ${cluster_name} "Running : cp -p ${outCONF} ${logical_backup_location}/${cluster_name}_postgresql.conf "
+   f_log debug ${cluster_name} "Running : cp -p ${outHBA}  ${logical_backup_location}/${cluster_name}_pg_hba.conf "
+fi
+
+case ${host} in
+127.0.0.1|localhost)
+ cp -pvu  ${outCONF} ${logical_backup_location}/postgresql.conf >> ${log_location}/configfile_${jobdate}.log 2>&1
+ cp -pvu  ${outHBA} ${logical_backup_location}/pg_hba.conf >> ${log_location}/configfile_${jobdate}.log 2>&1
+;;
+*)
+  scp postgres@${host}:${outCONF} ${logical_backup_location}/postgresql.conf >> ${log_location}/configfile_${jobdate}.log 2>&1
+  scp postgres@${host}:${outHBA} ${logical_backup_location}/pg_hba.conf >> ${log_location}/configfile_${jobdate}.log 2>&1
+;;
+esac
+
+if [ -f "${logical_backup_location}/postgresql.conf" ]; then
+   f_log success ${cluster_name} "Configuration file postgresql.conf saved  "
+else
+   f_log warning ${cluster_name} "Configuration file postgresql.conf not saved  "
+fi
+
+if [ -f "${logical_backup_location}/pg_hba.conf" ]; then
+   f_log success ${cluster_name} "Configuration file pg_hba.conf saved  "
+else
+   f_log warning ${cluster_name} "Configuration file pg_hba.conf not saved  "
+fi
+
+}
+
+function f_physical_backup(){
+
+  local option=${2}
+  # local dsn_info="sudo PGSERVICEFILE=${service_file} PGSERVICE=${cluster_name} -i -u postgres"
+  local jobdate=$(date "+%Y%m%d%H%M%S")
+  local exit_code=0
+
+
+  # Testing Connection :
+  # --------------------
+  # f_gather_config  || exit 2
+  # sudo_cmd="sudo -i -u ${sys_cluster_owner}"
+  #psql_connexion_cmd="${binary_path}/psql ${dsn_info}"
+
+  if ! f_test_connection ; then
+    f_log failed ${cluster_name} "PostgreSQL Cluster is not reachable . Exit  "
+    exit 2
+  fi
+
+
+
+# Ensure All directories are available :
+# --------------------
+
+
+physical_backup_location=${backup_directory}/${cluster_name}/base/
+data_file=${cluster_data_location}/backup.csv
+
+# Confirm actions to execute :
+# --------------------
+if [ "${option}" == "auto" ]; then
+    case "$(date +%w)" in
+        0) option="full";;
+        3) option="diff";;
+        *) option="incr";;
+    esac
+fi
+
+
+case ${option} in
+info)
+
+  f_physical_info ${cluster_name}
+  exit 0
+;;
+
+expire)
+  f_log info ${cluster_name} "Deleting expired physical backup for  ${cluster_name} "
+  f_physical_expire ${cluster_name}
+  exit 0
+;;
+
+conf)
+  f_log info ${cluster_name}  "Backuping configuration of ${cluster_name} "
+  f_global_backup ${cluster_name}
+  exit 0
+;;
+
+full)
+  bkp_type="full"
+ ;;
+
+diff)
+  bkp_type="diff"
+;;
+
+incr)
+  bkp_type="incr"
+;;
+
+*)
+  f_log info ${cluster_name} "Option ${option} not available ..."
+  f_usage
+;;
+
+esac
+
+case ${physical_backup_tool} in
+  pgbackrest)
+f_pgbackrest_backup ${bkp_type}
+  ;;
+  pg_basebackup)
+f_basebackup_backup
+  ;;
+  *)
+f_basebackup_backup
+;;
+esac
+# Backup configuration if asked :
+if [ "${with_global}" == "true" ]; then
+ f_global_backup
+fi
+}
+
+function f_basebackup_backup(){
+
+  local jobdate=$(date "+%Y%m%d%H%M%S")
+  local backup_path=${physical_backup_location}/${jobdate}F
+   output=$(mkdir -p ${backup_path} 2>&1 )
+  if [ $? -ne 0 ]; then
+    f_log failed "${cluster_name}" "Can't create ${backup_path} : ${output} "
+    exit 2
+  fi
+
+  if [ "${isverbose}" == true ]; then
+    pg_basebackup_log_console=" -P -v "
+  fi
+  f_log info ${cluster_name}  "Initiate Backup with pg_basebackup "
+  if [ -f "${binary_path}/pg_basebackup" ]; then
+     backup_cmd="${binary_path}/pg_basebackup "
+  else
+    f_log failed "${cluster_name}" "Failed to get binary pg_basebackup in the PostgreSQL version ${postgresql_cluster_version} "
+    exit 2
+  fi
+
+  f_log info ${cluster_name}  "Launching Backup full "
+  start_date=$(date "+%s")
+  bkp_dsn=" --host=${host} --user=${username} --port=${port} "
+
+  ${backup_cmd} ${bkp_dsn} -X stream -D ${backup_path} -c fast ${pg_basebackup_log_console} >> ${log_location}/basebackup_${jobdate}.log 2>&1
+  if [ $? -eq 0 ]; then
+      end_date=$(date "+%s")
+      duration=$((${end_date}-${start_date}))
+      bkpdirsize=$(du -sb ${backup_path} | mawk '{print $1}' )
+      f_log success ${cluster_name}  "Backup full for ${cluster_name} completed "
+      echo "${jobdate};$(date +"%Y-%m-%d %H:%M:%S %Z" -d@${start_date});$(date +"%Y-%m-%d %H:%M:%S %Z" -d@${end_date});pg_basebackup;${bkp_type};${duration};${bkpdirsize}"  >> ${data_file}
+      start_time=$(date +"%Y-%m-%d %H:%M:%S %Z" -d@${start_date})
+      end_time=$(date +"%Y-%m-%d %H:%M:%S %Z" -d@${end_date})
+      echo "pgtool_st;${start_time} " >> "${backup_path}/backup_label"
+      echo "pgtool_et;${end_time} " >> "${backup_path}/backup_label"
+      exit 0
+ else
+     f_log failed  ${cluster_name}  "Backup full for ${cluster_name} failed"
+     f_log failed ${cluster_name} " HINT Check : ${log_location}/basebackup_${jobdate}.log  "
+     exit  2
+ fi
+}
+
+function f_pgbackrest_backup(){
+  # Initiate backup :
+
+  local bkp_type=${1}
+
+  which pgbackrest > /dev/null 2>&1
+  if [ $? -ne 0 ]; then
+      f_log failed "${tool}" "Binary pgbackrest is not available "
+      exit 2
+  fi
+  if [ "${isverbose}" == true ]; then
+    pgbackrest_log_console=" --log-level-console=info"
+  fi
+
+  if [ ${nb_jobs} -gt 1 ]; then
+   process_max=" --process-max=${nb_jobs}"
+  fi
+  f_log info ${cluster_name}  "Initiate Backup with pgbackrest "
+   pgbackrest --stanza=${cluster_name} check ${pgbackrest_log_console}  --log-level-file=info > /dev/null 2>&1
+  if [ $? -ne 0 ]; then
+      f_log failed ${cluster_name} " HINT Check : ${cluster_name}-check.log in PgBackRest Log Directory  "
+      exit 2
+  fi
+  f_log success ${cluster_name}  "PgBackRest check completed  "
+  f_log info ${cluster_name}  "Launching Backup ${bkp_type}"
+
+  start_date=$(date "+%s")
+  pgbackrest --stanza=${cluster_name} backup --type=${bkp_type} ${process_max} --log-level-file=info ${pgbackrest_log_console}
+  if [ $? -eq 0 ]; then
+       end_date=$(date "+%s")
+       duration=$((${end_date}-${start_date}))
+       bkpdirsize=$( pgbackrest --stanza=${cluster_name} info --output=json | jq -r '.[0] | .backup[-1]| "\(.info.repository.delta)" ' |sed 's/"//g')
+       f_log success ${cluster_name}  "Backup ${bkp_type} for ${cluster_name} completed "
+      echo "${jobdate};$(date +"%Y-%m-%d %H:%M:%S %Z" -d@${start_date});$(date +"%Y-%m-%d %H:%M:%S %Z" -d@${end_date});pgbackrest;${bkp_type};${duration};${bkpdirsize}"  >> ${data_file}
+       exit 0
+  else
+      f_log failed  ${cluster_name}  "Backup ${bkp_type} for ${cluster_name} failed"
+      f_log failed ${cluster_name} " HINT Check : ${cluster_name}-backup.log in PgBackRest Log Directory  "
+      exit  2
+  fi
+
+}
+
+function f_physical_info(){
+
+
+  case ${physical_backup_tool} in
+  pgbackrest)
+  pgbackrest --stanza=${cluster_name} info --log-level-file=info |    mawk -F":" '{
+  if ( match($0,/stanza/)){printf "\n- Stanza : %s \n\n",$2;}  ;
+  if ( match($0,/backup:/)) { b=$1 ;gsub(/ /,"",b) ;  printf "%s = %-35s - ",toupper(b),$2} ;
+  if ( match($0,/timestamp/)) {printf " %s:%s:%s:%s:%s",$2,$3,$4,$5,$6}
+  if ( match($0,/, backup size:/)) { printf " - %s\n",$4};
+}END{printf "\n"}'
+
+  exit 0
+  ;;
+  pg_basebackup)
+  echo "PHYSICAL_BACKUPSET;SIZE (MB);START_DATE;END_DATE" >> ${tmp_dir}/.$$.tmp
+  echo "------------------;---------;----------;--------" >> ${tmp_dir}/.$$.tmp
+ls -1tdr ${physical_backup_location}/* 2>/dev/null| while read backupset
+do
+ backup_label=$(basename ${backupset} 2> /dev/null)
+ backup_size=$(du -sh ${backupset} | mawk '{print $1}'| sed -e 's/ //' 2> /dev/null)
+ start_date=$(cat ${backupset}/backup_label 2> /dev/null | mawk -F";" '/pgtool_st/ { print $2 }' 2> /dev/null || continue )
+ end_date=$(cat ${backupset}/backup_label 2> /dev/null | mawk -F";" '/pgtool_et/ { print $2 }' 2> /dev/null ||contine )
+ echo "$backup_label;$backup_size;$start_date;$end_date" >> ${tmp_dir}/.$$.tmp
+done
+test -f "${tmp_dir}/.$$.tmp"  && column -t -s ";" ${tmp_dir}/.$$.tmp && rm -f ${tmp_dir}/.$$.tmp
+
+  ;;
+  pitrery)
+  f_log warning "${pgtool}" "Work in progress"
+  exit 0
+  ;;
+esac
+}
+
+function f_physical_expire(){
+
+case ${physical_backup_tool} in
+  pg_basebackup)
+physical_backup_location=${backup_directory}/${cluster_name}/base
+
+if [ ! -z "${bkpset_input}" ]; then
+ physical_backup_retention="${bkpset_input}"
+ physical_backup_retention_method="custom"
+fi
+
+f_log info ${cluster_name} "Cleaning backup with method : ${physical_backup_retention_method} - value : ${physical_backup_retention}"
+
+case ${physical_backup_retention_method} in
+ count)
+   ((physical_backup_retention++))
+   ls -1td ${physical_backup_location}/*F 2>/dev/null | tail -n +${physical_backup_retention}  | while read backupset
+   do
+         [ ! -d "${backupset}" ] && continue
+         rm -fr ${backupset} && f_log success ${cluster_name} "Backup directory $(basename ${backupset}) dropped "  || f_log failed ${cluster_name} "Backup directory $(basename ${backupset}) not dropped "
+   done
+  ;;
+ days)
+   find ${physical_backup_location}/ -type d -name "*F" -mtime +${physical_backup_retention}  | while read backupset
+   do
+         [ ! -d "${backupset}" ] && continue
+         rm -fr ${backupset} && f_log success ${cluster_name} "Backup directory $(basename ${backupset}) dropped "  || f_log failed ${cluster_name} "Backup directory $(basename ${backupset}) not dropped "
+   done
+
+  ;;
+ custom)
+   backupset=$(find ${physical_backup_location}/ -type d -name "${bkpset_input}")
+   [ ! -d "${backupset}" ] && exit
+   rm -fr ${backupset} && f_log success ${cluster_name} "Backup directory $(basename ${backupset}) dropped "  || f_log failed ${cluster_name} "Backup directory $(basename ${backupset}) not dropped "
+esac
+;;
+pgbackrest)
+if [ ! -z "${bkpset_input}" ]; then
+ physical_backup_retention="${bkpset_input}"
+ physical_backup_retention_method="custom"
+else
+  f_log failed ${cluster_name} "A backupset must be specified "
+  exit 2
+fi
+if [ "${isverbose}" == true ]; then
+  pgbackrest_log_console=" --log-level-console=info"
+fi
+
+if [ "${dryrun}" == "yes" ]; then
+ pgbackrest --stanza=${cluster_name} expire --set=${physical_backup_retention} --dry-run --log-level-file=info ${pgbackrest_log_console}
+else
+ pgbackrest --stanza=${cluster_name} expire --set=${physical_backup_retention} --log-level-file=info ${pgbackrest_log_console}
+fi
+;;
+esac
+}
+
+# End Section : Physical Backup
+# --------------------------
+
+# --------------------------
+#  Section : Physical Restore
+
+function f_physical_restore(){
+
+
+# local dsn_info="sudo PGSERVICEFILE=${service_file} PGSERVICE=${cluster_name} -i -u postgres"
+local jobdate=$(date "+%Y%m%d%H%M%S")
+local exit_code=0
+
+# f_gather_config  || exit 2
+
+log_location=${log_directory}/${cluster_name}/${mainjobdate}
+cluster_data_location=${data_location}/${cluster_name}/
+physical_backup_location=${backup_directory}/${cluster_name}/base/
+data_file=${cluster_data_location}/restore.csv
+# [ -d "${log_location}" ] || mkdir -p ${log_location}
+# [ -d "${cluster_data_location}" ] || mkdir -p ${cluster_data_location}
+
+
+if [ ! -z "${target_time}" ]; then
+   date -d"${target_time}" > /dev/null  2>&1
+   if [ $? -ne 0 ]; then
+     f_log warning ${cluster_name} "Date format is not correct : ${target_time} . Expected : YYYY-MM-DD HH:MI:SS"
+     exit 2
+   fi
+else
+  target_time="latest"
+fi
+
+if [ -z "${bkpset_input}" ]; then
+  bkpset_input="null"
+fi
+
+if [ -z "${target_dir}" ]; then
+  target_dir="${data_directory}"
+fi
+
+f_log info ${cluster_name} "Restoring with date : ${target_time} "
+f_log info ${cluster_name} "Searching backup ... "
+
+case ${physical_backup_tool} in
+  pg_basebackup)
+  f_basebackup_restore ${cluster_name} "${bkpset_input}" "${target_dir}"
+  ;;
+  pgbackrest)
+  f_pgbackrest_restore ${cluster_name} "${target_time}" "${target_dir}"
+  ;;
+  *)
+  f_basebackup_restore ${cluster_name} "${bkpset_input}" "${target_dir}"
+  ;;
+esac
+
+}
+
+function f_basebackup_restore(){
+
+local bkpset_input=${2}
+local target_dir=${3}
+f_log info ${cluster_name}  "Launching restore with pgtool  ... "
+ f_log info ${cluster_name} "Searching basebackup ... "
+if [ "${bkpset_input}" == "null" ]; then
+ backupset=$(find  ${physical_backup_location} -type d -name "*F" -mtime -${logical_backup_retention} |sort | tail -n 1 )
+else
+ backupset=$(find  ${physical_backup_location} -type d -name  "${bkpset_input}"  )
+fi
+
+if [ ! -z  "${backupset}" ]; then
+  f_log info ${cluster_name} "Basebackup found :  $(basename ${backupset})... "
+else
+ f_log failed ${cluster_name} "No Basebackup found ... "
+ exit 2
+fi
+
+[ ! -d "${target_dir}" ] && f_log failed "${cluster_name}" "Target Directory is not available" && exit 2
+if [ $(ls -A "${target_dir}/" | wc -l ) -eq 0 ]; then
+ f_log info ${cluster_name} "Directory ${target_dir} is empty"
+ # chown ${sys_cluster_owner}:postgres -R "${target_dir}"
+else
+ f_log failed  ${cluster_name} "Directory ${target_dir} is not empty"
+ exit 2
+fi
+
+nb_files_to_copy=$(find "${backupset}" -type f | wc -l )
+nb_current_file_copied=0
+  f_log info  ${cluster_name} "Copying  backuppiece ... "
+  start_date=$(date "+%s")
+  cp -pvuR ${backupset}/* ${target_dir}/ | tee -a  ${log_location}/restore_basebackup_${jobdate}.log 2>&1
+  if [ $? -eq 0 ]; then
+    f_log success ${cluster_name} "All backuppiece restored"
+    end_date=$(date "+%s")
+    duration=$((${end_date}-${start_date}))
+    f_log success ${cluster_name}  "Restore full for ${cluster_name} completed "
+    echo "${jobdate};$(date +"%Y-%m-%d %H:%M:%S %Z" -d@${start_date});$(date +"%Y-%m-%d %H:%M:%S %Z" -d@${end_date});pg_basebackup;${target_time};${target_dir}${duration}"  >> ${data_file}
+  else
+    f_log failed ${cluster_name} "Failed to copy $(basename ${backuppiece}) to ${target_dir} , HINT : check ${log_location}/restore_basebackup_${jobdate}.log"
+  fi
+
+
+f_log success ${cluster_name} "All backuppiece restored"
+
+# f_log info  ${cluster_name} "Ajusting ACL on ${target_dir} "
+# chown ${sys_cluster_owner}:postgres -R ${target_dir}
+chmod 0700 ${target_dir}
+if [ -f "${binary_path}/pg_ctl" ]; then
+   ctl_cmd="${binary_path}/pg_ctl "
+else
+  f_log failed "${cluster_name}" "Failed to get binary pg_ctl in the PostgreSQL version ${postgresql_cluster_version} "
+  exit 2
+fi
+if [ "${target_dir}" != "${data_directory}" ]; then
+   f_log warning  ${cluster_name} "Be carefull for the PORT of the Cluster ...  "
+fi
+f_log info  ${cluster_name} "Cluster can be started with : "
+f_log info  ${cluster_name} " -  ${ctl_cmd} start -D ${target_dir}"
+
+}
+
+function f_pgbackrest_restore(){
+  f_log warning "${tool}" "Option pgbackrest restore  not yet available"
+  #exit 0
+  local target_time=${2}
+  local target_dir=${3}
+  local restore_target=""
+
+  if [ "${target_time}" != "latest" ]; then
+     restore_target=" --target=${target_time}"
+     restore_type=" --type=time"
+  fi
+  if [ "${isverbose}" == true ]; then
+    pgbackrest_log_console=" --log-level-console=info"
+  fi
+  if [ ${nb_jobs} -gt 1 ]; then
+   process_max=" --process-max=${nb_jobs}"
+  fi
+
+f_log info ${cluster_name} "Launching restore with pgbackrest  ... "
+if [ "${target_dir}" == "${data_directory}" ]; then
+   f_log warning ${cluster_name} "Overwritting datas in data_directory : ${data_directory} with DELTA mode ... "
+   [ -f ${data_directory}/postmaster.pid ] && f_log failed "${cluster_name}" "Cluster seems to be running , postmastert.pid is present !" && exit 2
+
+
+      start_date=$(date "+%s")
+       pgbackrest --stanza=${cluster_name} --log-level-console=info ${pgbackrest_log_console} ${process_max}  ${restore_type} "${restore_target}" --delta restore
+      if [ $? -eq 0 ]; then
+         end_date=$(date "+%s")
+         duration=$((${end_date}-${start_date}))
+         f_log success ${cluster_name}  "Restore for ${cluster_name} with time : ${target_time} completed "
+         echo "${jobdate};$(date +"%Y-%m-%d %H:%M:%S %Z" -d@${start_date});$(date +"%Y-%m-%d %H:%M:%S %Z" -d@${end_date});pgbackrest;${target_time};${target_dir};${duration}"  >> ${data_file}
+      else
+         f_log failed  ${cluster_name}  "Failed to restore for ${cluster_name} with time : ${target_time} "
+      fi
+else
+   [ ! -d "${target_dir}" ] && f_log failed "${cluster_name}" "Target Directory is not available" && exit 2
+   if [ $(ls -A "${target_dir}/" | wc -l ) -eq 0 ]; then
+      f_log info ${cluster_name} "Directory ${target_dir} is empty"
+      # chown ${sys_cluster_owner}:postgres -R "${target_dir}"
+      if [ "${target_time}" != "latest" ]; then
+        restore_target="--target=${target_time}"
+        restore_type="--type=time"
+      fi
+        start_date=$(date "+%s")
+        pgbackrest --stanza=${cluster_name} --log-level-file=info ${pgbackrest_log_console} ${process_max} ${restore_type} "${restore_target}" --pg1-path=${target_dir}  restore
+        if [ $? -eq 0 ]; then
+           end_date=$(date "+%s")
+           duration=$((${end_date}-${start_date}))
+           f_log success ${cluster_name}  "Restore for ${cluster_name} with time : ${target_time} completed "
+           echo "${jobdate};$(date +"%Y-%m-%d %H:%M:%S %Z" -d@${start_date});$(date +"%Y-%m-%d %H:%M:%S %Z" -d@${end_date});pgbackrest;${target_time};${target_dir};${duration}"  >> ${data_file}
+        else
+         f_log failed  ${cluster_name}  "Failed to restore for ${cluster_name} with time : ${target_time} "
+        fi
+  else
+     f_log failed  ${cluster_name} "Directory ${target_dir} is not empty"
+     exit 2
+  fi
+fi
+
+}
+
+
+# End Section : Physical Restore
+# --------------------------
+
+# --------------------------
+#  Section : Scan cluster
+
+function f_scan(){
+
+local jobdate=$(date "+%Y%m%d%H%M%S")
+local exit_code=0
+local rdbms_version="-"
+local openmode="-"
+local port="-"
+
+# Testing Connection :
+# --------------------
+
+f_gather_config  || exit 2
+
+if ! f_test_connection ; then
+   f_log failed ${cluster_name} "PostgreSQL Cluster is not reachable . Exit  "
+   exit 2
+fi
+
+rdbms_version=$(  ${psql_connexion_cmd}  -t -A  -c "select split_part(current_setting('server_version'),' ',1) ;"  2> /dev/null )
+port=$( ${psql_connexion_cmd} -t -A  -c  "show port"  2> /dev/null )
+openmode=$(  ${psql_connexion_cmd} -t -A  -c "select case when pg_is_in_recovery() then 'READ_ONLY' else 'READ_WRITE' end as openmode ;"  2> /dev/null )
+[ -z "${value}" ] &&  value=15
+
+if [ ${server_version_num} -lt 100000 ]; then
+    statementA="SELECT
+     pid,
+     client_addr,
+     application_name,
+     state ,
+     to_char(now() - backend_start,'HH24:MI:SS') as since,
+     backend_xmin as xmin_horizon,
+     sent_location ,
+     pg_xlogfile_name(sent_location) ,
+     write_location ,
+      pg_xlogfile_name(write_location) ,
+     flush_location ,
+      pg_xlogfile_name(flush_location) ,
+     replay_location ,
+       pg_xlogfile_name(replay_location)
+     FROM pg_stat_replication ; "
+else
+    statementA="SELECT
+       pid,
+       client_addr,
+       application_name,
+       state,
+       to_char(now() - backend_start,'HH24:MI:SS') as since,
+       backend_xmin as xmin_horizon,
+       sent_lsn  ,
+       pg_walfile_name(sent_lsn) ,
+       write_lsn ,
+        pg_walfile_name(write_lsn) ,
+       flush_lsn ,
+        pg_walfile_name(flush_lsn) ,
+       replay_lsn ,
+         pg_walfile_name(replay_lsn)
+       FROM pg_stat_replication ; "
+fi
+
+statementB="SELECT
+ pid ,
+ datname as database ,
+ state as query_state,
+ backend_xmin as xmin_horizon,
+md5(datname::varchar||pid::varchar||query_start::varchar) as session_hash ,
+ case when client_addr is null then '127.0.0.1' else client_addr end ,
+ to_char(query_start,'YYYY-MM-DD HH24:MI:SS') as query_start,
+ to_char(state_change,'YYYY-MM-DD HH24:MI:SS') as state_change ,
+ case when wait_event is not null then 'Y' else 'N' END as waiting ,
+  to_char(now() - query_start,'HH24:MI:SS') as duration,
+ substr(regexp_replace(regexp_replace(query,'(\n)(\r)',' ','g'),'\s+',' ','g'),0,100) as query_sample
+ FROM pg_stat_activity WHERE datname is not null AND  md5(datname::varchar||pid::varchar||query_start::varchar)  is not null
+  AND state != 'idle'
+   AND pid <> pg_backend_pid()
+  ORDER by duration DESC LIMIT ${value} ; "
+
+statementC="SELECT
+ blocking_locks.pid  AS blocking_pid,
+ARRAY_AGG(blocked_locks.pid) AS blocked_pid,
+blocked_activity.datname  as dbname,
+blocking_activity.usename AS blocking_user,
+ now() - blocking_activity.query_start AS blocking_since,
+substr(regexp_replace(regexp_replace(blocking_activity.query,'(\n)(\r)',' ','g'),'\s+',' ','g'),0,100)  AS blocking_by_statement,
+ ARRAY_AGG(substr(regexp_replace(regexp_replace(blocked_activity.query,'(\n)(\r)',' ','g'),'\s+',' ','g'),0,50))  AS blocked_statement
+ FROM
+ pg_catalog.pg_locks AS blocked_locks
+ JOIN pg_catalog.pg_stat_activity AS blocked_activity
+ ON blocked_activity.pid = blocked_locks.pid
+ JOIN pg_catalog.pg_locks AS blocking_locks
+ ON blocking_locks.locktype = blocked_locks.locktype
+ AND blocking_locks.database IS NOT DISTINCT FROM blocked_locks.database
+ AND blocking_locks.relation IS NOT DISTINCT FROM blocked_locks.relation
+ AND blocking_locks.page IS NOT DISTINCT FROM blocked_locks.page
+ AND blocking_locks.tuple IS NOT DISTINCT FROM blocked_locks.tuple
+ AND blocking_locks.virtualxid IS NOT DISTINCT FROM blocked_locks.virtualxid
+ AND blocking_locks.transactionid IS NOT DISTINCT FROM blocked_locks.transactionid
+ AND blocking_locks.classid IS NOT DISTINCT FROM blocked_locks.classid
+ AND blocking_locks.objid IS NOT DISTINCT FROM blocked_locks.objid
+ AND blocking_locks.objsubid IS NOT DISTINCT FROM blocked_locks.objsubid
+ AND blocking_locks.pid != blocked_locks.pid
+ JOIN pg_catalog.pg_stat_activity AS blocking_activity
+ ON blocking_activity.pid = blocking_locks.pid
+ WHERE NOT blocked_locks.granted
+ GROUP BY blocking_pid , blocking_user,dbname,blocking_since,blocking_by_statement
+ ORDER BY blocking_pid,blocking_since desc LIMIT ${value} ;"
+
+ statementD="select format('%s',to_char(current_timestamp,'YYYY-MM-DD HH24:MI:SS')); "
+ statementE="select format('%s/%s ',count(pid),current_setting('max_connections') ) from pg_stat_activity where datname is not null and state != 'idle' ; "
+ statementF="select datname, count(*) as open, count(*) FILTER ( WHERE state = 'active') as active, count(*) filter ( where state = 'idle' ) as idle , count(*) filter (where state = 'idle in transaction') as idle_in_transaction from pg_stat_activity where backend_type = 'client backend' GROUP BY ROLLUP(1) "
+
+[ -z "${target_time}" ] && target_time=1
+[ ${target_time} -lt 1 ] && target_time=1
+
+case ${scan_type} in
+live)
+
+select type in running_session blocked_session replication_session all
+do
+    case ${type} in
+    running_session)
+    watch -t -c -n ${target_time} "
+     echo \"\"
+     echo \" == pgTool Live Scan == \"
+     echo -n \"
+     - PostgreSQL Cluster : ${cluster_name} - Port : ${port} -  Version : ${rdbms_version} - Open Mode : ${openmode}
+     - Time : \" ; ${psql_connexion_cmd}  -t -c \"${statementD}\"
+     echo -n \"     - Refresh Time : ${target_time} seconds / Max Lines fetch : ${value}
+     - Nb current connections : \" ;  ${psql_connexion_cmd} -t -c \"${statementE}\"
+     echo \"\"
+     ${psql_connexion_cmd} --pset=footer=off --pset=title=running_queries -c \"${statementB}\"
+
+    if [ $? -ne 0 ]; then
+     break
+    fi "
+    ;;
+    blocked_session)
+    watch -t -c -n ${target_time} "
+     echo \"\"
+     echo \" == pgTool Live Scan == \"
+     echo -n \"
+     - PostgreSQL Cluster : ${cluster_name} - Port : ${port} -  Version : ${rdbms_version} - Open Mode : ${openmode}
+     - Time : \" ; ${psql_connexion_cmd} -t -c \"${statementD}\"
+     echo -n \"     - Refresh Time : ${target_time} seconds / Max Lines fetch : ${value}
+     - Nb current connections : \" ;  ${psql_connexion_cmd} -t -c \"${statementE}\"
+    echo \"\"
+     ${psql_connexion_cmd} --pset=footer=off --pset=title=blocking_queries  -c \"${statementC}\"
+
+    if [ $? -ne 0 ]; then
+     break
+    fi "
+    ;;
+    replication_session)
+    watch -t -c -n ${target_time} "
+     echo \"\"
+     echo \" == pgTool Live Scan == \"
+     echo -n \"
+     - PostgreSQL Cluster : ${cluster_name} - Port : ${port} -  Version : ${rdbms_version} - Open Mode : ${openmode}
+     - Time : \" ; ${psql_connexion_cmd} -t -c \"${statementD}\"
+     echo -n \"     - Refresh Time : ${target_time} seconds / Max Lines fetch : ${value}
+     - Nb current connections : \" ;  ${psql_connexion_cmd} -t -c \"${statementE}\"
+    echo \"\"
+     ${psql_connexion_cmd} --pset=footer=off --pset=title=replication_activity -c \"${statementA}\"
+
+    if [ $? -ne 0 ]; then
+     break
+    fi "
+    ;;
+    all)
+    watch -t -c -n ${target_time} "
+     echo \"\"
+     echo \" == pgTool Live Scan == \"
+     echo -n \"
+    --------------
+     - PostgreSQL Cluster : ${cluster_name} - Port : ${port} -  Version : ${rdbms_version} - Open Mode : ${openmode}
+     - Time : \" ; ${psql_connexion_cmd} -t -c \"${statementD}\"
+     echo -n \"     - Refresh Time : ${target_time} seconds / Max Lines fetch : ${value}
+     - Nb current connections : \" ;  ${psql_connexion_cmd} -t -c \"${statementE}\"
+    echo \"\"
+    ${psql_connexion_cmd} --pset=footer=off --pset=title=replication_activity -c \"${statementA}\"
+    ${psql_connexion_cmd} --pset=footer=off --pset=title=running_queries      -c \"${statementB}\"
+    ${psql_connexion_cmd} --pset=footer=off --pset=title=blocking_queries     -c \"${statementC}\"
+    if [ $? -ne 0 ]; then
+     break
+    fi "
+    ;;
+    *)
+    break ;;
+    esac
+done
+#
+# watch -t -c -n ${target_time} "bash ${tmp_dir}/${cluster_name}.watch"
+
+;;
+export)
+  select type in running_session blocked_session replication_session all
+  do
+              case ${type} in
+              running_session)
+          start_time=$(date +"%F %T")
+          watch -t -c -n ${target_time} "
+          echo \"\"
+          echo \"  == pgTool Export Scan == \"
+          echo  \" - PostgreSQL Cluster : ${cluster_name} - Port : ${port} -  Version : ${rdbms_version} \"
+          echo  \"   Background catch start at ${start_time} \"
+          echo \"\"
+          echo  \" Sessions : ${data_location}/${cluster_name}/sessions.trc \"
+           ${psql_connexion_cmd} -t -A -F ';' -c \"${statementB}\"  >> ${data_location}/${cluster_name}/sessions.trc
+          if [ $? -ne 0 ]; then
+           break
+          fi "
+          ;;
+          blocked_session)
+          watch -t -c -n ${target_time} "
+          echo \"\"
+          echo \"  == pgTool Export Scan == \"
+          echo  \" - PostgreSQL Cluster : ${cluster_name} - Port : ${port} -  Version : ${rdbms_version} \"
+          echo  \"   Background catch start at ${start_time} \"
+          echo \"\"
+          echo  \" Blocked    : ${data_location}/${cluster_name}/blocked.trc \"
+           ${psql_connexion_cmd} -t -A -F ';' -c \"${statementC}\"  >> ${data_location}/${cluster_name}/blocked.trc
+          if [ $? -ne 0 ]; then
+           break
+          fi "
+          ;;
+          replication_session)
+          watch -t -c -n ${target_time} "
+          echo \"\"
+          echo \"  == pgTool Export Scan == \"
+          echo  \" - PostgreSQL Cluster : ${cluster_name} - Port : ${port} -  Version : ${rdbms_version} \"
+          echo  \"   Background catch start at ${start_time} \"
+          echo \"\"
+          echo  \" Replication : ${data_location}/${cluster_name}/replication.trc \"
+           ${psql_connexion_cmd} -t -A -F ';' -c \"${statementA}\"  >> ${data_location}/${cluster_name}/replication.trc
+          if [ $? -ne 0 ]; then
+           break
+          fi "
+          ;;
+          all)
+          watch -t -c -n ${target_time} "
+          echo \"\"
+          echo \"  == pgTool Export Scan == \"
+          echo  \" - PostgreSQL Cluster : ${cluster_name} - Port : ${port} -  Version : ${rdbms_version} \"
+          echo  \"   Background catch start at ${start_time} \"
+          echo \"\"
+          echo  \" Replication : ${data_location}/${cluster_name}/replication.trc \"
+          echo  \" Sessions    : ${data_location}/${cluster_name}/sessions.trc \"
+          echo  \" Blocked     : ${data_location}/${cluster_name}/blocked.trc \"
+           ${psql_connexion_cmd} -t -A -F ';' -c \"${statementA}\"  >> ${data_location}/${cluster_name}/replication.trc
+           ${psql_connexion_cmd} -t -A -F ';' -c \"${statementB}\"  >> ${data_location}/${cluster_name}/sessions.trc
+           ${psql_connexion_cmd} -t -A -F ';' -c \"${statementC}\"  >> ${data_location}/${cluster_name}/blocked.trc
+          if [ $? -ne 0 ]; then
+           break
+          fi "
+          ;;
+
+          esac
+  done
+  ;;
+help)
+ printf "
+ ============== PATTERNS SEARCH INFORMATIONS ==============
+
+Engine Issues  :
+----------------
+ - database system was interrupted while in recovery
+ - database system was not properly shut down
+ - out of memory
+
+Logical Issues :
+----------------
+ - duplicate key
+ - canceling stat. due to lock timeout
+ - deadlock detected
+
+Physical Issues :
+-----------------
+ - No space left on device
+ - archive command failed
+ - invalid page in block
+ - temp files
+
+Connections Issues :
+--------------------
+ - connection to client lost
+ - connection reset by peer
+ - connection timeout
+ - no entry in pg_hba
+
+Security Issues :
+-----------------
+ - permission denied
+ - only superuser
+"
+;;
+esac
+}
+
+function f_scan_log(){
+
+  # Testing Connection :
+  # # --------------------
+  # f_gather_config  || exit 2
+  if [[ ! ${host} =~ 127.0.0.1 ]] && [[ ! ${host} =~ localhost ]] && [[ ! ${host} =~ run ]]; then
+  f_log warning ${cluster_name} "Can't perform log scan on remote host "
+  exit 2
+  fi
+
+  if ! f_test_connection ; then
+     f_log failed ${cluster_name} "PostgreSQL Cluster is not reachable . Exit  "
+     exit 2
+  fi
+
+   # Verfier si logging collector est activé ou non
+   pglog_directory=$( ${psql_connexion_cmd} -t -A -c 'show log_directory' 2> /dev/null)
+   datadir=$( ${psql_connexion_cmd} -t -A  -c "show data_directory"  2> /dev/null)
+
+      if [ "${pglog_directory}" = "pg_log" ] || [ "${pglog_directory}" = "log" ]; then
+         pglog_dir_to_check=${datadir}/${pglog_directory}
+      else
+         pglog_dir_to_check=${pglog_directory}
+      fi
+      # f_log info ${cluster_name} "Parsing log from ${pglog_dir_to_check} ... "
+      echo ""
+      echo  " Displays count of common error or warning in logfiles within 3 days  "
+      echo ""
+      echo  " Directory : ${pglog_dir_to_check} "
+      echo ""
+      if [ "${isverbose}" == "true" ]; then
+        parsing_option="display"
+      else
+        parsing_option="count"
+      fi
+      case ${parsing_option} in
+      count)
+      echo "Log_filename;Engine;Stmts;Physical;Connect.;Security" > ${tmp_dir}/.${cluster_name}.logscan
+      echo "    -     ;issues;issues;issues;issues;issues" >> ${tmp_dir}/.${cluster_name}.logscan
+      echo 'BEGIN { IGNORECASE = 1 ;  }
+      /CEST|CET|UTC|GMT/                                                            {logdate[$1]++;}
+      /duplicate key value violates/                                                {logdate[$1]++; li_count[$1]=li_count[$1]+1 ; }
+      /still waiting for lock/                                                      {logdate[$1]++; li_count[$1]=li_count[$1]+1 ; }
+      /canceling statement due to lock timeout/                                     {logdate[$1]++; li_count[$1]=li_count[$1]+1 ; }
+      /deadlock detected/                                                           {logdate[$1]++; li_count[$1]=li_count[$1]+1 ; }
+      /out of memory/                                                               {logdate[$1]++; ei_count[$1]=ei_count[$1]+1 ; }
+      /database system was interrupted while in recovery/                           {logdate[$1]++; ei_count[$1]=ei_count[$1]+1 ; }
+      /database system was not properly shut down; automatic recovery in progress/  {logdate[$1]++; ei_count[$1]=ei_count[$1]+1 ; }
+      /connection to client lost/                                                   {logdate[$1]++; ci_count[$1]=ci_count[$1]+1 ; }
+      /reset by peer/                                                               {logdate[$1]++; ci_count[$1]=ci_count[$1]+1 ; }
+      /connection timeout/                                                          {logdate[$1]++; ci_count[$1]=ci_count[$1]+1 ; }
+      /pg_hba.conf/                                                                 {logdate[$1]++; ci_count[$1]=ci_count[$1]+1 ; }
+      /permission denied/                                                           {logdate[$1]++; si_count[$1]=si_count[$1]+1 ; }
+      /only superuser/                                                              {logdate[$1]++; si_count[$1]=si_count[$1]+1 ; }
+      /space left on device/                                                        {logdate[$1]++;pi_count[$1]=pi_count[$1]+1 ; }
+      /archive command failed/                                                      {logdate[$1]++;pi_count[$1]=pi_count[$1]+1 ; }
+      /temp files/                                                                  {logdate[$1]++;pi_count[$1]=pi_count[$1]+1 ; }
+      /invalid page in block/                                                       {logdate[$1]++;pi_count[$1]=pi_count[$1]+1 ; }
+      END {
+      for (ld in logdate) {
+         if (li_count[ld] == "" ){li_count[ld]=0 ;}
+         if (ei_count[ld] == "" ){ei_count[ld]=0 ;}
+         if (ci_count[ld] == "" ){ci_count[ld]=0 ;}
+         if (si_count[ld] == "" ){si_count[ld]=0 ;}
+         if (pi_count[ld]  == "" ){ pi_count[ld]=0 ;}
+         filename=sprintf("basename %s",input_filename) ;  filename | getline log_filename
+         printf "%s;%s;%s;%s;%s;%s\n",log_filename,ei_count[ld],li_count[ld],pi_count[ld],ci_count[ld],si_count[ld] >> outfile
+         }
+       }' > ${tmp_dir}/$$.scanlog.awk
+       ;;
+       display)
+       echo 'BEGIN { IGNORECASE = 1 ;filename=sprintf("basename %s",input_filename) ;  filename | getline log_filename
+        printf "\n%s :\n",log_filename; }
+       /duplicate key value violates/                                                {printf "  Logical - %d - %s\n",NR,substr($0,0,320) }
+       /still waiting for lock/                                                      {printf "  Logical - %d - %s\n",NR,substr($0,0,320)  }
+       /canceling statement due to lock timeout/                                     {printf "  Logical - %d - %s\n",NR,substr($0,0,320)  }
+       /deadlock detected/                                                           {printf "  Logical - %d - %s\n",NR,substr($0,0,320) }
+       /out of memory/                                                               {printf "  Engine - %d - %s\n",NR,substr($0,0,320)  }
+       /database system was interrupted while in recovery/                           {printf "  Engine - %d - %s\n",NR,substr($0,0,320)  }
+       /database system was not properly shut down; automatic recovery in progress/  {printf "  Engine - %d - %s\n",NR,substr($0,0,320)  }
+       /connection to client lost/                                                   {printf "  Connections - %d - %s\n",NR,substr($0,0,320)  }
+       /reset by peer/                                                               {printf "  Connections - %d - %s\n",NR,substr($0,0,320)  }
+       /connection timeout/                                                          {printf "  Connections - %d - %s\n",NR,substr($0,0,320)  }
+       /pg_hba.conf/                                                                 {printf "  Connections - %d - %s\n",NR,substr($0,0,320)  }
+       /permission denied/                                                           {printf "  Security - %d - %s\n",NR,substr($0,0,320)  }
+       /only superuser/                                                              {printf "  Security - %d - %s\n",NR,substr($0,0,320)  }
+       /space left on device/                                                       {printf "  Physical - %d - %s\n",NR,substr($0,0,320)  }
+       /archive command failed/                                                      {printf "  Physical - %d - %s\n",NR,substr($0,0,320)  }
+       /temp files/                                                                  {printf "  Physical - %d - %s\n",NR,substr($0,0,320)  }
+       /invalid page in block/                                                       {printf "  Physical - %d - %s\n",NR,substr($0,0,320)  }
+       END {}' > ${tmp_dir}/$$.scanlog.awk
+        ;;
+       esac
+
+
+       if [ "${from_file}" != "yes" ]; then
+           find  ${pglog_dir_to_check} -type f \( -name "*.log" -o -name "*.csv" \) -mtime -3 | sort | while read file
+           do
+           cat ${file} | grep -a "^20[0-9][0-9]" | cut -c 1-320 | mawk -v outfile=${tmp_dir}/.${cluster_name}.logscan -v input_filename=${file} -f ${tmp_dir}/$$.scanlog.awk
+           done
+       else
+         if [ -f "${file_name}" ]; then
+           file="${file_name}"
+         elif [ -f "${pglog_dir_to_check}/${file_name}" ]; then
+           file="${pglog_dir_to_check}/${file_name}"
+         else
+          f_log failed ${cluster_name} "Log file ${file_name} seems to not exists "
+          exit 1
+         fi
+         cat ${file} | grep -a "^20[0-9][0-9]" | cut -c 1-320 | mawk -v outfile=${tmp_dir}/.${cluster_name}.logscan -v input_filename=${file} -f ${tmp_dir}/$$.scanlog.awk
+       fi
+       test -f  ${tmp_dir}/.${cluster_name}.logscan && column -t -s ";"   ${tmp_dir}/.${cluster_name}.logscan
+       test -f ${tmp_dir}/.${cluster_name}.logscan && rm -f ${tmp_dir}/.${cluster_name}.logscan
+       test -f ${tmp_dir}/$$.scanlog.awk && rm -f ${tmp_dir}/$$.scanlog.awk
+# read -n 1 -r -s -p $'Press enter to continue...\n'
+}
+
+function f_stat_collector(){
+
+# INTEGER LE JOB LABEL
+local jobdate=$(date "+%Y%m%d%H%M%S")
+# f_gather_config ||exit 2
+#psql_connexion_cmd="${binary_path}/psql ${dsn_info}"
+
+
+ if ! f_test_connection ${cluster_name}; then
+ 	f_log failed ${cluster_name} "PostgreSQL Cluster : ${cluster_name} is not alive . Exit "
+ 	exit 2
+ fi
+
+f_log info "${cluster_name}" "Gathering global statistics ... "
+${psql_connexion_cmd} -t -F";" -A -c "select '${jobdate}',* from pg_stat_bgwriter"  2> /dev/null >> ${data_location}/${cluster_name}/stat_bgwriter_history.csv
+${psql_connexion_cmd} -t -F";" -A -c "select '${jobdate}',* from pg_stat_database where datname is not null  and datname != 'template0' "  2> /dev/null >> ${data_location}/${cluster_name}/stat_databases_history.csv
+${psql_connexion_cmd} -t -F";" -A -c "select '${jobdate}',* from pg_stat_database_conflicts where datname is not null and datname != 'template0' " 2> /dev/null >> ${data_location}/${cluster_name}/stat_databases_conflicts_history.csv
+f_log info "${cluster_name}" "Resetting global statistics ... "
+${psql_connexion_cmd} -t  -A -c "select pg_stat_reset_shared('bgwriter')" > /dev/null 2>&1
+
+[ ! -z "${dbs}" ] && databases=${dbs}
+
+case ${databases} in
+all)
+dblist=$(  ${psql_connexion_cmd} -t -A -c "set application_name=pgtool ; select datname from pg_database where datname not in ('postgres','template0','template1','pgtool')")
+for db in ${dblist}
+do
+f_log info "${cluster_name}" "Gathering statistics from DB : ${db} ..."
+${psql_connexion_cmd} -t -F";" -A -d ${db} -c "select '${jobdate}',current_database(),a.*,case when b.relkind = 'r' then 'relation'  when b.relkind = 'v' then 'view'  when b.relkind = 'm' then 'mview'  when b.relkind = 'f' then 'foreign'else 'other' end as type from pg_statio_all_tables a join pg_class b on a.relid = b.oid "  2> /dev/null >> ${data_location}/${cluster_name}/statio_inner_database_tables_history.csv
+${psql_connexion_cmd} -t -F";" -A -d ${db} -c "select '${jobdate}',current_database(),* from pg_statio_all_indexes"  2> /dev/null >> ${data_location}/${cluster_name}/statio_inner_database_indexes_history.csv
+f_log info "${cluster_name}" "Resetting global statistics ... "
+${psql_connexion_cmd} -t  -A -d ${db} -c "select pg_stat_reset();" > /dev/null 2>&1
+done
+f_log info "${cluster_name}" "Statistics gathered "
+;;
+"")
+f_log failed  ${cluster_name} "No database selected "
+exit 2
+;;
+*)
+for db in $(echo "${databases}" | tr ',' '\n')
+do
+  f_log info "${cluster_name}" "Gathering statistics from DB : ${db} ..."
+  ${psql_connexion_cmd} -t -F";" -A -d ${db} -c "select '${jobdate}',current_database(),a.*, case when b.relkind = 'r' then 'relation' when b.relkind = 'v' then 'view'  when b.relkind = 'm' then 'mview'  when b.relkind = 'f' then 'foreign'  else 'other' end as type  from pg_statio_all_tables a join pg_class b on a.relid = b.oid "  2> /dev/null >> ${data_location}/${cluster_name}/statio_inner_database_tables_history.csv
+  ${psql_connexion_cmd} -t -F";" -A -d ${db} -c "select '${jobdate}',current_database(),* from pg_statio_all_indexes"  2> /dev/null >> ${data_location}/${cluster_name}/statio_inner_database_indexes_history.csv
+  f_log info "${cluster_name}" "Resetting global statistics ... "
+  ${psql_connexion_cmd} -t  -A -d ${db} -c "select pg_stat_reset();" > /dev/null 2>&1
+done
+f_log info "${cluster_name}" "Statistics gathered "
+;;
+esac
+}
+
+function f_stat_collector_rotate(){
+
+local jobdate=$(date "+%Y%m%d%H%M%S")
+find ${data_location}/${cluster_name} -type f -name "*.csv" -size +${pgtool_stat_collector_max_size} |while read file
+do
+f_log info "${cluster_name}" "Compression of $(basename ${file})"
+bzip2 -s ${file} && touch ${file}
+if [ $? -eq 0 ]; then
+f_log success "${cluster_name}" "Re-creation $(basename ${file})"
+else
+f_log failed "${cluster_name}" "Re-creation $(basename ${file})"
+fi
+
+
+done
+
+}
+
+#  End Section : Scan cluster
+# --------------------------
+
+# ------------------------------------------------------------------------------
+#  Main Program
+# ------------------------------------------------------------------------------
+
+
+function f_main(){
+
+trap f_canceled SIGINT SIGABRT SIGKILL
+
+# --------------------
+if [ "${backup_flag}" == "true" ]; then
+  f_check_lock ${cluster_name}
+  f_gather_config  || exit 2
+   case ${backup_type} in
+   full|diff|incr|info|auto|expire)
+      f_physical_backup "${cluster_name}" "${backup_type}" ;;
+   logical)
+      f_logical_backup   ;;
+   infological)
+      f_logical_info  ;;
+   expirelogical)
+      f_logical_expire   ;;
+   globals)
+     f_global_backup ;;
+   *)
+      echo "Backup option ${backup_type} is unknown . Available : full diff incr info auto expire logical  infological expirelogical globals "  ;;
+   esac
+fi
+# --------------------
+if [ "${restore_flag}" == "true" ]; then
+  f_check_lock ${cluster_name}
+  f_gather_config  || exit 2
+  f_physical_restore "${cluster_name}"
+fi
+
+# --------------------
+if [ "${info_flag}" == "true" ]; then
+  f_gather_config  || exit 2
+case ${info_type} in
+  check)
+   f_list "${cluster_name}"
+   ;;
+  details)
+   f_details "${cluster_name}"
+  ;;
+  crma)
+   f_light_crma "${cluster_name}"
+  ;;
+  config)
+   f_showconfig "${cluster_name}"
+  ;;
+   *)
+   echo "Informations option ${info_type} is unknown . Available : check details crma config "
+  ;;
+   esac
+fi
+
+if [ "${starter_flag}" == "true" ]; then
+  f_gather_config  || exit 2
+  f_pre_start_check "${cluster_name}"
+fi
+
+# --------------------
+if [ "${scan_flag}" == "true" ]; then
+  f_gather_config  || exit 2
+ case ${scan_type} in
+live|export|help)
+   f_scan "${cluster_name}" "${scan_type}" ;;
+log)
+   f_scan_log "${cluster_name}"  ;;
+stats)
+  f_stat_collector "${cluster_name}" ;;
+expire)
+   f_stat_collector_rotate "${cluster_name}" ;;
+*)
+   echo "Scan option ${scan_type} is unknown . Available : live export log stats expire help "  ;;
+esac
+fi
+# --------------------
+if [ "${maintenance_flag}" == "true" ]; then
+  f_check_lock ${cluster_name}
+  f_gather_config  || exit 2
+   case ${maintenance_type} in
+   analyze|vacuum|reindex)
+      f_maintenance_db  "${maintenance_type}" ;;
+   logcleaner)
+      f_log_cleaner "${cluster_name}"  ;;
+   pgtooldb)
+      f_create_pgtool_db  "${cluster_name}"  "${target_cluster}" ;;
+   expire)
+      f_log_expire "${cluster_name}" ;;
+   *)
+      echo "Maintenance option ${maintenance_type} is unknow . Available : analyze vacuum reindex logcleaner pgtooldb expire " ;;
+   esac
+fi
+
+# --------------------
+if [ "${generate_flag}" == "true" ]; then
+   f_generate "${cluster_name}"
+fi
+
+# --------------------
+if [ "${duplicate_flag}" == "true" ]; then
+  echo " Work in progress"
+  exit 0
+  f_check_lock ${cluster_name}
+  f_gather_config  || exit 2
+  case ${duplicate_type} in
+  db)
+      f_logical_copy  "${cluster_name}" "${target_cluster}" "${databases}";;
+  cluster)
+      f_physical_copy "${cluster_name}" "${target_cluster}" ;;
+
+  migrate)
+     f_migrate_data "${cluster_name}" "${target_cluster}" ;;
+  *)
+     echo "Duplicate option ${duplicate_type} is unknown . Available : db cluster  " ;;
+  esac
+fi
+
+ # --------------------
+ if [ "${compare_flag}" == "true" ]; then
+   exit 2
+   f_check_lock ${cluster_name}
+   f_compare "${target_cluster}"
+ fi
+
+# --------------------
+if [ "${ressource_flag}" == "true" ]; then
+  f_check_lock ${cluster_name}
+  case ${state_objective} in
+    start|stop|reload|restart)
+      f_manage_ressource  ;;
+    *)
+     echo "Ressource option ${state_objective} is unknown . Available : start stop "  ;;
+  esac
+fi
+
+# --------------------
+if [ "${connect_flag}" == "true" ]; then
+    f_gather_config  || exit 2
+  f_connect ${cluster_name}
+fi
+}
+
+
+
+# Load global parameters
+# ---------------------
+# -o hd:vr:t:m:c:gb:rM:V:B:RD:T:qs:fC:i:u:k:j:n:L:w:lK
+
+
+if [ "$(whoami)" != "postgres" ]; then
+  echo " /!\  -  this program must be run as postgres  "
+  exit 2
+fi
+
+
+
+GET_OPT=$(getopt -o '' --long compare:,pattern:,connect,windows:,include,exclude,from-file:,jobs:,sql:,ressource:,lscluster,color,value:,duplicate:,method:,for-standby,target-cluster:,cluster:,generate,starter,full,backup:,backupset:,scan:,restore,target-time:,quiet,target-dir:,with-global,help,chkcluster,info:,databases:,verbose,max-time:,dryrun,maintenance:,tables:,schemas: -n ' pgtool ' -- "$@")
+eval set -- "$GET_OPT"
+while true
+do
+ case "${1}" in
+
+   --cluster)
+       cluster_name="${2}"         ;
+       shift 2                  ;;
+
+   --target-cluster)
+       target_cluster="${2}"       ;
+       shift 2                  ;;
+
+  --lscluster)
+      f_lscluster       ;
+      exit 0                   ;;
+
+  --chkcluster)
+      f_chkclusters             ;
+      exit 0                   ;;
+
+  --starter)
+      restore_flag=false        ;
+      backup_flag=false         ;
+      maintenance_flag=false    ;
+      info_flag=false           ;
+      scan_flag=false           ;
+      starter_flag=true         ;
+      ressource_flag=false      ;
+      shift 1                  ;;
+
+  --ressource)
+      restore_flag=false        ;
+      backup_flag=false         ;
+      maintenance_flag=false    ;
+      info_flag=false           ;
+      scan_flag=false           ;
+      starter_flag=false        ;
+      ressource_flag=true       ;
+      state_objective=${2}      ;
+      shift 2                  ;;
+  --connect)
+      restore_flag=false        ;
+      backup_flag=false         ;
+      maintenance_flag=false    ;
+      info_flag=false           ;
+      scan_flag=false           ;
+      starter_flag=false        ;
+      ressource_flag=false      ;
+      connect_flag=true         ;
+      shift 1                  ;;
+
+--pattern)
+     scan_option="${2}"  ;
+     shift 2 ;;
+
+  --with-global)
+      with_global="true"        ;
+      shift 1                  ;;
+
+  --sql)
+      sql_scripts="${2}"        ;
+      shift 2                  ;;
+
+  --for-standby)
+      for_standby="true"        ;
+      shift 1                  ;;
+
+  --info)
+      restore_flag=false        ;
+      backup_flag=false         ;
+      maintenance_flag=false    ;
+      info_flag=true            ;
+      scan_flag=false           ;
+      starter_flag=false        ;
+      ressource_flag=false      ;
+      info_type=${2}            ;
+      shift 2                  ;;
+
+  --scan)
+      restore_flag=false        ;
+      backup_flag=false         ;
+      maintenance_flag=false    ;
+      info_flag=false           ;
+      scan_flag=true            ;
+      scan_type=${2}            ;
+      starter_flag=false        ;
+      ressource_flag=false      ;
+      shift 2                  ;;
+
+  --generate)
+      restore_flag=false        ;
+      backup_flag=false         ;
+      maintenance_flag=false    ;
+      info_flag=false           ;
+      generate_flag=true        ;
+      scan_flag=false           ;
+      starter_flag=false        ;
+      ressource_flag=false      ;
+      shift 1                  ;;
+
+  --backup)
+      backup_flag=true          ;
+      restore_flag=false        ;
+      info_flag=false           ;
+      maintenance_flag=false    ;
+      backup_type="${2}"        ;
+      scan_flag=false           ;
+      starter_flag=false        ;
+      ressource_flag=false      ;
+      shift 2                  ;;
+
+  --restore)
+      backup_flag=false         ;
+      info_flag=false           ;
+      maintenance_flag=false    ;
+      restore_flag=true         ;
+      scan_flag=false           ;
+      starter_flag=false        ;
+      restore_type="${2}"       ;
+      ressource_flag=false      ;
+      shift 2                  ;;
+
+  --duplicate)
+      backup_flag=false         ;
+      info_flag=false           ;
+      maintenance_flag=false    ;
+      restore_flag=false        ;
+      scan_flag=false           ;
+      starter_flag=false        ;
+      duplicate_flag=true       ;
+      duplicate_type=${2}       ;
+      ressource_flag=false      ;
+      shift 2                  ;;
+
+  --maintenance)
+      backup_flag=false         ;
+      info_flag=false           ;
+      maintenance_flag=true     ;
+      restore_flag=false        ;
+      scan_flag=false           ;
+      maintenance_type=${2}     ;
+      starter_flag=false        ;
+      ressource_flag=false      ;
+      shift 2                  ;;
+
+  --compare)
+      backup_flag=false         ;
+      info_flag=false           ;
+      maintenance_flag=false     ;
+      restore_flag=false        ;
+      scan_flag=false           ;
+      compare_type=${2}         ;
+      starter_flag=false        ;
+      compare_flag=true        ;
+      ressource_flag=false      ;
+      shift 2                  ;;
+
+
+  --from-file)
+      file_name="${2}";
+      from_file="yes"           ;
+      shift 2                  ;;
+
+  --value)
+     value=${2}                 ;
+     shift 2                   ;;
+
+  --method)
+      method_type="${2}"          ;
+      shift 2                  ;;
+
+  --target-time)
+      target_time="${2}"        ;
+      shift 2                  ;;
+
+  --target-dir)
+      target_dir="${2}"         ;
+      shift 2                  ;;
+
+  --backupset)
+      bkpset_input="${2}"         ;
+      shift 2                  ;;
+
+  --databases)
+      dbs="${2}"                ;
+      shift 2                  ;;
+
+  --tables)
+      tables="${2}"             ;
+      shift 2                  ;;
+
+  --schemas)
+      schemas="${2}"             ;
+      shift 2                  ;;
+  --jobs)
+     nb_jobs="${2}"             ;
+    shift 2                    ;;
+
+  --verbose)
+      isverbose="true"          ;
+      shift 1                  ;;
+
+  --windows)
+      windows=${2}              ;
+      shift 2                  ;;
+
+  --quiet)
+      log_output_format="file"  ;
+      shift 1                  ;;
+
+  --include)
+  tables_treatment="include"    ;
+  schemas_treatment="include"    ;
+  schemas_tables_treatment="include"    ;
+  shift 1 ;;
+
+  --exclude)
+  tables_treatment="exclude"    ;
+  schemas_treatment="exclude"    ;
+  schemas_tables_treatment="exclude"    ;
+        shift 1 ;;
+
+  --dryrun)
+      dryrun="yes"                  ;
+      shift 1                  ;;
+  --color)
+      is_colored="true"         ;
+      shift 1                  ;;
+
+  --full)
+      is_full_param="(full,verbose,analyze) " ;
+      vacuum_type=" full "      ;
+      shift 1                  ;;
+
+  --help)
+      f_usage                   ;
+      shift 1                  ;;
+
+  --)
+      shift                     ;
+      break                    ;;
+  *)
+      echo " Option ${*} is unknow " ; exit 2 ;;
+  esac
+done
+
+[ "${cluster_name}" == "null" ] && f_log warning "${tool}" "A cluster must be specified " && exit 1
+
+mkdir ${tmp_dir} -p
+trap "rm ${tmp_dir}/${cluster_name}.lock 2>/dev/null " EXIT
+
+# Check requirements
+# ---------------------
+
+f_requirements
+
+
+# Execute main program
+# ---------------------
+
+f_main
