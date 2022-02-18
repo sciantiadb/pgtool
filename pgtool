@@ -1342,7 +1342,7 @@ if ! f_test_connection ${cluster_name}; then
 fi
 f_log info ${cluster_name} "Gathering informations ... "
 synthese_db=$(  ${psql_connexion_cmd} -R";"  -t -A  -d postgres -c "select case when count(datname)::integer is null then 0 else count(datname) end||';'||case when ROUND(sum(pg_database_size(datname))/1024/1024,0) is null  then 0 else ROUND(sum(pg_database_size(datname))/1024/1024,0) end   from pg_database where datname not in ('postgres','template0','template1')" )
-shared_buffers=$(  ${psql_connexion_cmd} -R";" -t -A  -d postgres -c "select (setting::integer*8)/1024 from pg_settings where name ='shared_buffers'" )
+# shared_buffers=$(  ${psql_connexion_cmd} -R";" -t -A  -d postgres -c "select (setting::integer*8)/1024 from pg_settings where name ='shared_buffers'" )
 work_mem=$(  ${psql_connexion_cmd} -R";"  -t -A  -d postgres -c "select setting::integer/1024 from pg_settings where name ='work_mem'" )
 max_connections=$(  ${psql_connexion_cmd} -R";"  -t -A  -d postgres -c "select setting from pg_settings where name ='max_connections'" )
 synthese_mem=$(  ${psql_connexion_cmd} -R";"  -t -A  -d postgres -c "select sum (case when name = 'shared_buffers' then (setting::integer*8)/1024 else (setting::integer/1024)*current_setting('max_connections')::integer end ) as memory  from pg_settings where name in ('shared_buffers','work_mem') group by rollup (name) ;")
@@ -1402,7 +1402,7 @@ select host  from  temp_host ;
 " > ${tmp_dir}/report.$$.sql
 host_name=$( ${psql_connexion_cmd}  -q  -t -A  -d postgres -f ${tmp_dir}/report.$$.sql )
 
-collect_datas="$(date +%d/%m/%Y);${cluster_name};${port};${synthese_version};${synthese_db};${host_name};${shared_buffers};${work_mem};${max_connections};${synthese_mem};${mem_size};${data_dir_size};${fs_data_dir_size}"
+collect_datas="$(date +%d/%m/%Y);${cluster_name};${port};${synthese_version};${synthese_db};${host_name};${max_connections};${work_mem};${synthese_mem};${mem_size};${data_dir_size};${fs_data_dir_size}"
 
 #echo "${collect_datas}" > ${data_location}/${cluster_name}_${crma_date}.crma
 echo ${collect_datas} >> ${data_location}/globals_${crma_date}.crma
@@ -2895,6 +2895,8 @@ fi
 statementB="SELECT
  pid ,
  datname as database ,
+ usename as user ,
+ application_name as app_name ,
  state as query_state,
  backend_xmin as xmin_horizon,
 md5(datname::varchar||pid::varchar||query_start::varchar) as session_hash ,
